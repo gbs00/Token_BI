@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Token BI</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260422-landscape-overflow" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="phone-frame{% if accounts|length == 1 %} single-account{% endif %}">
+        <header class="agent-nav" aria-label="Agents">
+          <span class="agent-tab">Overview</span>
+          <span class="agent-tab active">Codex</span>
+          <span class="agent-tab disabled">Gemini</span>
+          <span class="agent-tab disabled">Kimi</span>
+        </header>
+
+        <section class="context-strip">
+          <div class="context-copy">
+            <div class="eyebrow">Mac Sidecar Dashboard</div>
+            <h1>Codex</h1>
+          </div>
+          <div class="context-actions">
+            <span class="refresh-countdown" data-refresh-countdown>Refresh in 03:00</span>
+            <a class="refresh-link" href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">Refresh</a>
+          </div>
+        </section>
+
+        {% if accounts|length != 1 %}
+        <section class="account-switcher" aria-label="Accounts">
+          {% if accounts %}
+            {% for account in accounts %}
+              <a
+                class="account-pill {% if selected_account_id == account.account_id %}active{% endif %}"
+                href="/dashboard?account_id={{ account.account_id }}"
+              >
+                <span class="account-pill-email">{{ account.masked_email }}</span>
+              </a>
+            {% endfor %}
+          {% else %}
+            <div class="empty-card">
+              <p class="empty-title">No accounts yet</p>
+              <p class="empty-copy">Create an account entry on Mac, then start the live browser worker and complete the first login.</p>
+            </div>
+          {% endif %}
+        </section>
+        {% endif %}
+
+        {% if accounts|length > 1 %}
+        <section class="selected-account-bar">
+          <div class="selected-account-copy">
+            <span class="selected-account-label">Viewing account</span>
+            <strong>{{ dashboard.account.masked_email if dashboard.account else 'No active account selected' }}</strong>
+          </div>
+        </section>
+        {% endif %}
+
+        <section class="dashboard-card">
+          {% if dashboard.account %}
+            <div class="card-head">
+              <div class="card-identity">
+                <p class="card-kicker">Viewing account</p>
+                <h2>{{ dashboard.account.masked_email }}</h2>
+              </div>
+              <div class="status-stack">
+                <span class="status-chip state-{{ dashboard.state.value }}">{{ dashboard.state.value.replace('_', ' ') }}</span>
+                <span class="source-chip">
+                  {{ 'Estimated' if dashboard.summary.is_estimated else 'Live' }}
+                </span>
+              </div>
+            </div>
+          {% else %}
+            <div class="card-head">
+              <div class="card-identity">
+                <p class="card-kicker">Viewing account</p>
+                <h2>No active account selected</h2>
+              </div>
+            </div>
+          {% endif %}
+
+          <div class="support-row">
+            <p
+              class="updated-at"
+              {% if dashboard.summary.updated_at %}
+                data-updated-at="{{ dashboard.summary.updated_at.isoformat() }}"
+              {% endif %}
+            >
+              {% if dashboard.summary.updated_at %}
+                Updated just now
+              {% else %}
+                Waiting for first refresh
+              {% endif %}
+            </p>
+            <span class="source-note">
+              {{ dashboard.summary.source_type }}
+              {% if dashboard.summary.source_detail and dashboard.summary.source_detail != 'unknown' %}
+                · {{ dashboard.summary.source_detail }}
+              {% endif %}
+            </span>
+          </div>
+
+          {% if dashboard.message %}
+            <div class="message-banner">{{ dashboard.message }}</div>
+          {% endif %}
+
+          {% if dashboard.metrics %}
+            <div class="metric-list">
+              {% for metric in dashboard.metrics %}
+                <article class="metric-card">
+                  <div class="metric-head">
+                    <div>
+                      <p class="metric-title">{{ metric.label }}</p>
+                      <p class="metric-subtitle">Remaining usage window</p>
+                    </div>
+                    <p class="metric-value">
+                      {% if metric.remaining_pct is not none %}
+                        {{ metric.remaining_pct }}% left
+                      {% else %}
+                        --
+                      {% endif %}
+                    </p>
+                  </div>
+                  <div class="progress-track">
+                    {% set width = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
+                    <div class="progress-fill" style="width: {{ width }}%"></div>
+                  </div>
+                  <div class="metric-row muted">
+                    <span>Remaining</span>
+                    <span
+                      class="reset-copy"
+                      {% if metric.reset_at %}
+                        data-reset-at="{{ metric.reset_at.isoformat() }}"
+                      {% endif %}
+                    >
+                      {% if metric.reset_at %}
+                        Resets soon
+                      {% else %}
+                        Reset time unavailable
+                      {% endif %}
+                    </span>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          {% if dashboard.detail_links %}
+            <div class="detail-links">
+              {% for link in dashboard.detail_links %}
+                <a class="detail-link" href="{{ link.url }}" target="_blank" rel="noreferrer">
+                  {{ link.label }}
+                </a>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </section>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260422-landscape-overflow"></script>
+  </body>
+</html>
