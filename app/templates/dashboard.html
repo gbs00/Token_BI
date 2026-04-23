@@ -3,10 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Token BI" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0c111b" />
+    <link rel="manifest" href="{{ url_for('static', path='site.webmanifest') }}" />
     <title>Token BI</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260422-landscape-overflow" />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260423-reconnect-safe" />
   </head>
-  <body>
+  <body data-dashboard-account-id="{{ selected_account_id or '' }}">
     <main class="app-shell">
       <section class="phone-frame{% if accounts|length == 1 %} single-account{% endif %}">
         <header class="agent-nav" aria-label="Agents">
@@ -23,7 +29,7 @@
           </div>
           <div class="context-actions">
             <span class="refresh-countdown" data-refresh-countdown>Refresh in 03:00</span>
-            <a class="refresh-link" href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">Refresh</a>
+            <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">Refresh</a>
           </div>
         </section>
 
@@ -61,11 +67,11 @@
             <div class="card-head">
               <div class="card-identity">
                 <p class="card-kicker">Viewing account</p>
-                <h2>{{ dashboard.account.masked_email }}</h2>
+                <h2 data-account-name>{{ dashboard.account.masked_email }}</h2>
               </div>
               <div class="status-stack">
-                <span class="status-chip state-{{ dashboard.state.value }}">{{ dashboard.state.value.replace('_', ' ') }}</span>
-                <span class="source-chip">
+                <span class="status-chip state-{{ dashboard.state.value }}" data-state-chip>{{ dashboard.state.value.replace('_', ' ') }}</span>
+                <span class="source-chip" data-live-chip>
                   {{ 'Estimated' if dashboard.summary.is_estimated else 'Live' }}
                 </span>
               </div>
@@ -74,7 +80,7 @@
             <div class="card-head">
               <div class="card-identity">
                 <p class="card-kicker">Viewing account</p>
-                <h2>No active account selected</h2>
+                <h2 data-account-name>No active account selected</h2>
               </div>
             </div>
           {% endif %}
@@ -82,6 +88,7 @@
           <div class="support-row">
             <p
               class="updated-at"
+              data-updated-node
               {% if dashboard.summary.updated_at %}
                 data-updated-at="{{ dashboard.summary.updated_at.isoformat() }}"
               {% endif %}
@@ -92,7 +99,7 @@
                 Waiting for first refresh
               {% endif %}
             </p>
-            <span class="source-note">
+            <span class="source-note" data-source-note>
               {{ dashboard.summary.source_type }}
               {% if dashboard.summary.source_detail and dashboard.summary.source_detail != 'unknown' %}
                 · {{ dashboard.summary.source_detail }}
@@ -101,21 +108,35 @@
           </div>
 
           {% if dashboard.message %}
-            <div class="message-banner">{{ dashboard.message }}</div>
+            <div class="message-banner" data-message-banner>{{ dashboard.message }}</div>
           {% endif %}
 
           {% if dashboard.metrics %}
-            <div class="metric-list">
+            <div class="metric-list" data-metric-list>
               {% for metric in dashboard.metrics %}
-                <article class="metric-card">
+                <article class="metric-card" data-metric-card="{{ metric.metric_type }}">
                   <div class="metric-head">
                     <div>
                       <p class="metric-title">{{ metric.label }}</p>
                       <p class="metric-subtitle">Remaining usage window</p>
                     </div>
-                    <p class="metric-value">
+                    {% if metric.remaining_pct is not none %}
+                      {% if metric.remaining_pct > 75 %}
+                        {% set metric_tier = "tier-75-plus" %}
+                      {% elif metric.remaining_pct > 50 %}
+                        {% set metric_tier = "tier-50-75" %}
+                      {% elif metric.remaining_pct > 25 %}
+                        {% set metric_tier = "tier-25-50" %}
+                      {% else %}
+                        {% set metric_tier = "tier-25-below" %}
+                      {% endif %}
+                    {% else %}
+                      {% set metric_tier = "tier-unknown" %}
+                    {% endif %}
+                    <p class="metric-value {{ metric_tier }}" data-metric-value>
                       {% if metric.remaining_pct is not none %}
-                        {{ metric.remaining_pct }}% left
+                        <span class="metric-percent" data-metric-percent>{{ metric.remaining_pct }}%</span>
+                        <span class="metric-suffix">left</span>
                       {% else %}
                         --
                       {% endif %}
@@ -123,12 +144,13 @@
                   </div>
                   <div class="progress-track">
                     {% set width = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
-                    <div class="progress-fill" style="width: {{ width }}%"></div>
+                    <div class="progress-fill" data-progress-fill style="width: {{ width }}%"></div>
                   </div>
                   <div class="metric-row muted">
                     <span>Remaining</span>
                     <span
                       class="reset-copy"
+                      data-reset-copy
                       {% if metric.reset_at %}
                         data-reset-at="{{ metric.reset_at.isoformat() }}"
                       {% endif %}
@@ -158,6 +180,6 @@
       </section>
     </main>
 
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260422-landscape-overflow"></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260423-reconnect-safe"></script>
   </body>
 </html>

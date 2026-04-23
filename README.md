@@ -3,6 +3,19 @@
 补充文档：
 
 - [SETUP.md](/Users/gbs00/我的文件夹/Projects/Token_BI/SETUP.md)：新电脑部署、日常启动、账号登录、手机访问与排障说明
+- [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：后续开发使用的技术架构文档
+
+## 2026-04-23 当前版本补充
+
+今天已将 MVP 从“命令行手动启动 + IP 地址访问”进一步收敛为更适合日常使用的 Mac 副屏产品形态：
+
+- 固定入口：手机端优先使用 `http://gbs00MacBook-Air-M2.local:8787/dashboard`，不再依赖会变化的局域网 IP。
+- 本地控制台：Mac 端可通过 `scripts/open_control_panel.command` 打开控制页面，直接启动、停止、添加账号、查看状态和打开看板。
+- 服务生命周期：Token BI 服务启动时会尝试为 `active` 账号恢复或拉起对应浏览器 worker；服务关闭时不再主动杀掉已登录的 Chrome worker。
+- 手机刷新策略：移动端页面不再使用整页 `reload`，改为后台请求 `/api/v1/dashboard` 并原地更新额度。服务短暂重启时页面会保留旧内容并自动重试。
+- 主屏幕模式：页面支持 iPhone Safari “添加到主屏幕”后的 standalone 模式，横屏长期摆放时建议使用该入口。
+- Safari 边界：网页无法做到“横屏隐藏浏览器栏、竖屏保留浏览器栏”；是否显示浏览器壳由 iOS/Safari 决定。
+- 额度强调：`remaining_pct` 数字已放大，并按剩余量分为 4 个颜色档位：`>75%`、`>50 且 <=75%`、`>25 且 <=50%`、`<=25%`。
 
 ## 1. 项目目标
 
@@ -601,10 +614,12 @@ MVP 可以提供 `Open Usage` 按钮，但需要明确边界：
 
 ### 10.2 客户端刷新
 
-- 页面打开后每 `180 秒` 轮询 dashboard API
+- 页面打开后每 `180 秒` 后台轮询 dashboard API
 - 页面切到后台后暂停轮询
 - 页面重新激活时立即刷新一次
 - 提供手动刷新按钮
+- 不再整页 `reload`，避免服务重启瞬间导致 iOS 主屏幕页面卡在系统级“服务器无响应”页
+- 请求失败时保留当前页面内容，并以 `15 秒` 间隔自动重试
 
 这样可以兼顾：
 
@@ -612,6 +627,7 @@ MVP 可以提供 `Open Usage` 按钮，但需要明确边界：
 - 数据基本实时
 - 实现复杂度低
 - 无需历史数据存储
+- 服务短暂重启时具备更好的恢复体验
 
 ## 11. 安全设计
 
@@ -660,12 +676,14 @@ MVP 可以提供 `Open Usage` 按钮，但需要明确边界：
 
 #### 第一步：添加账号
 
-- 用户在 `Mac` 上点击 `Add Account`
-- 系统拉起一个受控浏览器窗口和独立浏览器上下文
+- 用户在 `Mac` 控制台点击 `添加账号`
+- 系统自动创建一个待识别账号记录，并拉起一扇独立 `Chrome` 登录窗口
 - 用户手动登录对应 `Codex` 账号
 - 登录成功后，系统不关闭该浏览器 worker
-- 后台直接在这个活着的会话里校验 analytics 页面是否可访问
-- 校验通过后，将该 worker 视为可用数据源
+- 用户回到控制台点击 `刷新状态`
+- 后台在这个活着的会话里校验 analytics 页面是否可访问
+- 校验通过后，将该 worker 视为可用数据源，并从已登录会话中提取账号标识、脱敏后写回账号配置
+- Token BI 服务重启后，会优先尝试恢复现存 worker；若没有现存 worker，则为 `active` 账号重新拉起 worker
 
 #### 第二步：保存账号配置
 
@@ -684,6 +702,7 @@ MVP 可以提供 `Open Usage` 按钮，但需要明确边界：
 - `status` 建议取值为 `active / expired / invalid`
 - `session_storage_path` 指向本地浏览器上下文目录，但该目录主要用于 worker 运行，不再承诺可在浏览器关闭后稳定复用
 - `account_alias` 在 MVP 中不单独暴露为自定义命名，默认等于 `masked_email`
+- `masked_email` 可由控制台流程在登录验证成功后自动识别和脱敏写入，首次创建时可先使用 `Signing in ...` 占位
 
 本地存储建议：
 
@@ -718,6 +737,7 @@ MVP 可以提供 `Open Usage` 按钮，但需要明确边界：
 - 抓取时直接复用这个仍然活着的浏览器会话
 - 不再把“关闭浏览器后复用 cookie”作为主方案
 - 不再把“Playwright 直接拉起登录浏览器”作为主方案
+- 服务关闭时不主动关闭浏览器 worker，避免用户重启服务后必须重新登录
 
 抓取优先级建议固定为：
 
@@ -843,8 +863,9 @@ MVP 不建议保存：
 3. Usage 获取架构：`Usage Connector Manager + 多源 fallback`
 4. 抓取优先级：本机 connector 优先，Web 内部先页面请求结果，再脚本对象，最后 DOM 降级
 5. 回退数据策略：只保留内存，不跨重启持久化
-6. 服务启动方式：手动启动，服务不关闭则持续运行
-7. 访问控制：MVP 不加额外口令，先仅限同一局域网访问
+6. 服务启动方式：Mac 本地控制台页面启动/停止主服务，日常不再依赖命令行或 Codex 代操作
+7. 固定访问入口：优先使用 Bonjour `.local` 地址，不再依赖动态 IP
+8. 访问控制：MVP 不加额外口令，移动端看板先仅限同一局域网访问；本地控制台仅监听 `127.0.0.1`
 
 ## 12. 分阶段实施建议
 
@@ -921,6 +942,8 @@ MVP 总周期预计：
   - `周额度`
   - `Usage 详情入口`
 - 刷新：`3 分钟`
+- 访问入口：`http://gbs00MacBook-Air-M2.local:8787/dashboard`
+- Mac 操作入口：`scripts/open_control_panel.command`
 - 数据策略：
   - 基于页面抓取
   - `Mac` 侧维护最小登录态
@@ -934,22 +957,3 @@ MVP 总周期预计：
 - OpenAI 官方帮助：[Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan)
 - Apple 安全更新说明：[Apple security releases](https://support.apple.com/en-mo/100100)
 - WebKit 说明：[Web Push for Web Apps on iOS and iPadOS](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/)
-
-## 16. 当前输出说明
-
-本文件默认按以下假设编写：
-
-- 输出文档格式为 `Markdown`
-- 首期目标仅为 `Codex 订阅账号`
-- 不落库 usage 历史
-- `Usage 详情入口` 作为辅助能力存在
-- 终端形态默认是手机网页，而非原生 iOS App
-- 默认部署形态为 `Mac 本地服务 + iPhone 局域网访问`
-- 仅保存实现多账号所需的最小鉴权信息
-
-如果后续要继续推进，下一步最值得补的是：
-
-1. `PRD 详细版`
-2. `Mac 本地部署说明`
-3. `后台管理页原型`
-4. `iPhone 5s 低保真线框图`

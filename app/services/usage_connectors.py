@@ -77,7 +77,7 @@ class LocalCodexConnector:
                 f"Local connector snapshot is missing required fields: {missing}"
             )
 
-        return {
+        normalized = {
             "session_remaining_pct": int(payload["session_remaining_pct"]),
             "session_reset_at": self._coerce_datetime(payload["session_reset_at"]),
             "weekly_remaining_pct": int(payload["weekly_remaining_pct"]),
@@ -86,6 +86,9 @@ class LocalCodexConnector:
             or datetime.now().astimezone(),
             "is_estimated": bool(payload.get("is_estimated", False)),
         }
+        if payload.get("account_masked_email"):
+            normalized["account_masked_email"] = str(payload["account_masked_email"])
+        return normalized
 
     def _coerce_datetime(self, value) -> Optional[datetime]:
         if value in {None, ""}:

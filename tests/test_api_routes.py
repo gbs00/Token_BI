@@ -51,6 +51,18 @@ def test_create_and_list_accounts_api(app) -> None:
     assert items[0]["account_alias"] == "guo****@gmail.com"
 
 
+def test_create_account_without_masked_email_uses_pending_placeholder(app) -> None:
+    client = TestClient(app)
+    response = client.post("/api/v1/accounts", json={})
+
+    assert response.status_code == 201
+    account = response.json()["account"]
+    assert account["account_id"].startswith("acc_")
+    assert account["masked_email"].startswith("Signing in ")
+    assert account["account_alias"] == account["masked_email"]
+    assert account["status"] == "pending"
+
+
 def test_dashboard_api_returns_empty_state(app) -> None:
     client = TestClient(app)
     response = client.get("/api/v1/dashboard")
@@ -69,6 +81,35 @@ def test_validate_account_uses_refresh_flow(app) -> None:
     assert payload["validated"] is True
     assert payload["dashboard_state"] == "ready"
     assert payload["account"]["status"] == "active"
+
+
+def test_validate_account_syncs_detected_masked_identity(app) -> None:
+    client = TestClient(app)
+    account = client.post("/api/v1/accounts", json={}).json()["account"]
+    account_id = account["account_id"]
+    snapshot_path = app.state.container.settings.runtime_local_connector_dir / f"{account_id}.json"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "account_masked_email": "user****@example.com",
+                "session_remaining_pct": 86,
+                "session_reset_at": "2026-04-22T03:00:00+08:00",
+                "weekly_remaining_pct": 72,
+                "weekly_reset_at": "2026-04-28T00:00:00+08:00",
+                "updated_at": "2026-04-21T23:00:00+08:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.post(f"/api/v1/accounts/{account_id}/validate")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validated"] is True
+    assert payload["account"]["masked_email"] == "user****@example.com"
+    assert payload["account"]["account_alias"] == "user****@example.com"
 
 
 def test_refresh_dashboard_endpoint_returns_live_payload(app) -> None:
@@ -125,7 +166,7 @@ def test_get_account_session_returns_worker_snapshot(app) -> None:
     ).json()["account"]
     account_id = account["account_id"]
 
-    app.state.container.browser_worker_service.get_session_snapshot = (
+    app.state.container.browser_worker_service.restore_session_snapshot = (
         lambda _: BrowserSessionSnapshot(
             account_id=account_id,
             state=BrowserSessionState.READY,
@@ -150,15 +191,15 @@ def test_dashboard_api_maps_demo_query_to_real_visible_account(app) -> None:
             AccountRecord(
                 account_id="acc_demo_main",
                 account_alias="demo",
-                masked_email="8754****@qq.com",
+                masked_email="user****@example.com",
                 status=AccountStatus.ACTIVE,
                 session_storage_path="/tmp/acc_demo_main",
                 created_at=now,
             ),
             AccountRecord(
                 account_id="acc_real_active",
-                account_alias="8754****@qq.com",
-                masked_email="8754****@qq.com",
+                account_alias="user****@example.com",
+                masked_email="user****@example.com",
                 status=AccountStatus.ACTIVE,
                 session_storage_path="/tmp/acc_real_active",
                 created_at=now,

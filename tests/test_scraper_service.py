@@ -150,6 +150,48 @@ def test_scraper_parses_usage_from_direct_wham_payload(test_settings) -> None:
     assert isinstance(payload["weekly_reset_at"], datetime)
 
 
+def test_scraper_extracts_masked_account_identity_from_json(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+    payload = scraper._parse_artifacts(
+        {
+            "title": "Codex",
+            "bodyText": "中文界面",
+            "networkJsonTexts": [],
+            "directIdentityJsonTexts": [
+                """
+                {
+                  "user": {
+                    "name": "Real User",
+                    "email": "someone.long@example.com"
+                  }
+                }
+                """
+            ],
+            "directUsageJsonTexts": [
+                """
+                {
+                  "rate_limit": {
+                    "primary_window": {
+                      "used_percent": 10,
+                      "reset_at": 1776843664
+                    },
+                    "secondary_window": {
+                      "used_percent": 3,
+                      "reset_at": 1777430464
+                    }
+                  }
+                }
+                """
+            ],
+            "scriptJsonTexts": [],
+        }
+    )
+
+    assert payload["account_masked_email"] == "some****@example.com"
+    assert payload["session_remaining_pct"] == 90
+    assert payload["weekly_remaining_pct"] == 97
+
+
 def test_scraper_parses_usage_from_chinese_dom_text(test_settings) -> None:
     scraper = ScraperService(test_settings)
     payload = scraper._parse_artifacts(

@@ -15,14 +15,7 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 def root(request: Request) -> RedirectResponse:
-    container = request.app.state.container
-    default_account = container.account_service.preferred_account()
-    if default_account is None:
-        return RedirectResponse(url="/dashboard", status_code=307)
-    return RedirectResponse(
-        url=f"/dashboard?account_id={default_account.account_id}",
-        status_code=307,
-    )
+    return RedirectResponse(url="/dashboard", status_code=307)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

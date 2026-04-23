@@ -1,0 +1,9 @@
+{
+  "name": "Token BI",
+  "short_name": "Token BI",
+  "display": "standalone",
+  "background_color": "#0c111b",
+  "theme_color": "#0c111b",
+  "start_url": "/dashboard",
+  "scope": "/"
+}

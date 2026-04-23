@@ -26,4 +26,4 @@ class AccountRecord(BaseModel):
 
 class CreateAccountRequest(BaseModel):
     account_alias: Optional[str] = None
-    masked_email: str
+    masked_email: Optional[str] = None

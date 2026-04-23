@@ -106,18 +106,49 @@ class BrowserWorkerService:
             self._sessions[account_id] = session
             return self._snapshot(session)
 
+    def ensure_worker_for_account(
+        self,
+        account: AccountRecord,
+        target_url: Optional[str] = None,
+    ) -> BrowserSessionSnapshot:
+        context_dir = Path(account.session_storage_path)
+        with self._lock:
+            session = self._sessions.get(account.account_id)
+            if session is not None and self._debug_port_ready(session.debug_port):
+                current_url = self._probe_current_url(session.debug_port)
+                if current_url:
+                    session.current_url = current_url
+                session.last_seen_at = datetime.now(timezone.utc)
+                return self._snapshot(session)
+
+            restored = self._restore_existing_session(account)
+            if restored is not None:
+                return self._snapshot(restored)
+
+        return self.start_login_session(
+            account_id=account.account_id,
+            context_dir=context_dir,
+            target_url=target_url or self._settings.analytics_url,
+        )
+
     def fetch_usage(self, account: AccountRecord) -> dict:
         with self._lock:
             session = self._sessions.get(account.account_id)
             if session is None:
-                raise LiveSessionRequiredError(
-                    "No live browser worker for this account. Start login on Mac and keep the browser window open."
-                )
+                session = self._restore_existing_session(account)
+                if session is None:
+                    raise LiveSessionRequiredError(
+                        "No live browser worker for this account. Start login on Mac and keep the browser window open."
+                    )
 
             if not self._debug_port_ready(session.debug_port):
-                session.state = BrowserSessionState.STOPPED
-                session.last_error = "Live browser worker is not reachable. Start login on Mac again."
-                raise LiveSessionRequiredError(session.last_error)
+                restored = self._restore_existing_session(account)
+                if restored is not None:
+                    session = restored
+                else:
+                    session.state = BrowserSessionState.STOPPED
+                    session.last_error = "Live browser worker is not reachable. Start login on Mac again."
+                    raise LiveSessionRequiredError(session.last_error)
 
             try:
                 payload, current_url = self._scrape_via_cdp(session.debug_port)
@@ -150,6 +181,18 @@ class BrowserWorkerService:
                 session.current_url = current_url
             return self._snapshot(session)
 
+    def restore_session_snapshot(self, account: AccountRecord) -> Optional[BrowserSessionSnapshot]:
+        with self._lock:
+            session = self._sessions.get(account.account_id)
+            if session is None:
+                session = self._restore_existing_session(account)
+            if session is None:
+                return None
+            current_url = self._probe_current_url(session.debug_port)
+            if current_url:
+                session.current_url = current_url
+            return self._snapshot(session)
+
     def close_session(self, account_id: str) -> None:
         with self._lock:
             session = self._sessions.pop(account_id, None)
@@ -164,8 +207,7 @@ class BrowserWorkerService:
 
     def shutdown(self) -> None:
         with self._lock:
-            for account_id in list(self._sessions.keys()):
-                self.close_session(account_id)
+            self._sessions.clear()
 
     def _launch_browser(self, context_dir: Path, debug_port: int, target_url: str) -> None:
         subprocess.Popen(
@@ -294,6 +336,32 @@ class BrowserWorkerService:
                 lock_file.unlink()
             except OSError:
                 pass
+
+    def _restore_existing_session(self, account: AccountRecord) -> Optional[ManagedBrowserSession]:
+        context_dir = Path(account.session_storage_path)
+        existing = self._find_existing_browser_worker(
+            [
+                context_dir,
+                context_dir.parent / f"{context_dir.name}-cdp",
+            ]
+        )
+        if existing is None:
+            return None
+
+        existing_context_dir, debug_port = existing
+        now = datetime.now(timezone.utc)
+        session = ManagedBrowserSession(
+            account_id=account.account_id,
+            context_dir=existing_context_dir,
+            debug_port=debug_port,
+            browser_app_name=self._settings.browser_app_name,
+            state=BrowserSessionState.READY,
+            launched_at=now,
+            last_seen_at=now,
+            current_url=self._probe_current_url(debug_port),
+        )
+        self._sessions[account.account_id] = session
+        return session
 
     def _snapshot(self, session: ManagedBrowserSession) -> BrowserSessionSnapshot:
         return BrowserSessionSnapshot(

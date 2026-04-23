@@ -76,11 +76,12 @@ class AccountService:
             accounts = self._read_accounts()
             account_id = f"acc_{uuid.uuid4().hex[:8]}"
             session_path = self._settings.runtime_contexts_dir / account_id
-            account_alias = self._resolve_account_alias(body)
+            masked_email = self._resolve_masked_email(body, account_id)
+            account_alias = self._resolve_account_alias(body, masked_email)
             account = AccountRecord(
                 account_id=account_id,
                 account_alias=account_alias,
-                masked_email=body.masked_email,
+                masked_email=masked_email,
                 status=AccountStatus.PENDING,
                 session_storage_path=str(session_path),
                 created_at=datetime.now(timezone.utc),
@@ -89,11 +90,17 @@ class AccountService:
             self._write_accounts(accounts)
             return account
 
-    def _resolve_account_alias(self, body: CreateAccountRequest) -> str:
+    def _resolve_masked_email(self, body: CreateAccountRequest, account_id: str) -> str:
+        masked_email = (body.masked_email or "").strip()
+        if masked_email:
+            return masked_email
+        return f"Signing in {account_id[-4:]}"
+
+    def _resolve_account_alias(self, body: CreateAccountRequest, masked_email: str) -> str:
         alias = (body.account_alias or "").strip()
         if alias:
             return alias
-        return body.masked_email
+        return masked_email
 
     def _select_visible_accounts(
         self,
@@ -157,6 +164,32 @@ class AccountService:
                         "last_validated_at": datetime.now(timezone.utc)
                         if update_validation_time
                         else account.last_validated_at,
+                    }
+                )
+                accounts[index] = updated_account
+                break
+
+            if updated_account is None:
+                return None
+
+            self._write_accounts(accounts)
+            return updated_account
+
+    def update_account_identity(self, account_id: str, masked_email: str) -> Optional[AccountRecord]:
+        normalized_email = masked_email.strip()
+        if not normalized_email:
+            return None
+
+        with self._lock:
+            accounts = self._read_accounts()
+            updated_account: Optional[AccountRecord] = None
+            for index, account in enumerate(accounts):
+                if account.account_id != account_id:
+                    continue
+                updated_account = account.model_copy(
+                    update={
+                        "account_alias": normalized_email,
+                        "masked_email": normalized_email,
                     }
                 )
                 accounts[index] = updated_account

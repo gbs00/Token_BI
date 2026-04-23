@@ -82,6 +82,15 @@ class UsageService:
                 return stale
             return self._build_error(account=account, message=str(exc))
 
+        identity = str(connector_result.payload.get("account_masked_email") or "").strip()
+        if identity and identity != account.masked_email:
+            updated_identity = self._account_service.update_account_identity(
+                account.account_id,
+                masked_email=identity,
+            )
+            if updated_identity is not None:
+                account = updated_identity
+
         payload = self._build_ready_payload(
             account=account,
             raw_payload=connector_result.payload,

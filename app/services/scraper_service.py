@@ -104,6 +104,7 @@ class ScraperService:
             )
             artifacts["networkJsonTexts"] = network_json_texts
             artifacts["directUsageJsonTexts"] = []
+            artifacts["directIdentityJsonTexts"] = []
             try:
                 direct_payload = page.evaluate(
                     """async () => {
@@ -121,6 +122,28 @@ class ScraperService:
                     artifacts["directUsageJsonTexts"].append(direct_payload)
             except PlaywrightError:
                 pass
+            for identity_url in (
+                "/backend-api/me",
+                "/backend-api/accounts/check/v4-2023-04-27",
+            ):
+                try:
+                    identity_payload = page.evaluate(
+                        """async (url) => {
+                            const response = await fetch(url, {
+                              credentials: 'include',
+                              headers: { accept: 'application/json' }
+                            });
+                            if (!response.ok) {
+                              return null;
+                            }
+                            return await response.text();
+                        }""",
+                        identity_url,
+                    )
+                    if identity_payload:
+                        artifacts["directIdentityJsonTexts"].append(identity_payload)
+                except PlaywrightError:
+                    continue
             return artifacts
         finally:
             try:
@@ -154,6 +177,7 @@ class ScraperService:
     def _parse_artifacts(self, artifacts: dict) -> dict:
         body_text = self._normalize_text(artifacts.get("bodyText", ""))
         title = self._normalize_text(artifacts.get("title", ""))
+        account_identity = self._extract_account_identity(artifacts, body_text)
 
         if self._looks_like_login_gate(title=title, body_text=body_text):
             raise SessionExpiredError("Session expired on Mac. Please sign in again on Mac.")
@@ -161,24 +185,113 @@ class ScraperService:
         direct_data = self._extract_usage_from_json_texts(artifacts.get("directUsageJsonTexts", []))
         if direct_data is not None:
             direct_data["source_detail"] = "direct_usage_fetch"
-            return direct_data
+            return self._with_account_identity(direct_data, account_identity)
 
         network_data = self._extract_usage_from_json_texts(artifacts.get("networkJsonTexts", []))
         if network_data is not None:
             network_data["source_detail"] = "network_response"
-            return network_data
+            return self._with_account_identity(network_data, account_identity)
 
         script_data = self._extract_usage_from_json_texts(artifacts.get("scriptJsonTexts", []))
         if script_data is not None:
             script_data["source_detail"] = "script_json"
-            return script_data
+            return self._with_account_identity(script_data, account_identity)
 
         text_data = self._extract_usage_from_text(body_text)
         if text_data is not None:
             text_data["source_detail"] = "dom_fallback"
-            return text_data
+            return self._with_account_identity(text_data, account_identity)
 
         raise AnalyticsPageChangedError("Analytics page may have changed.")
+
+    def _with_account_identity(self, payload: dict, account_identity: Optional[str]) -> dict:
+        if account_identity:
+            payload["account_masked_email"] = account_identity
+        return payload
+
+    def _extract_account_identity(self, artifacts: dict, body_text: str) -> Optional[str]:
+        json_sources = [
+            *artifacts.get("directIdentityJsonTexts", []),
+            *artifacts.get("networkJsonTexts", []),
+            *artifacts.get("scriptJsonTexts", []),
+        ]
+        identity = self._extract_identity_from_json_texts(json_sources)
+        if identity:
+            return identity
+
+        email_match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", body_text)
+        if email_match:
+            return self._mask_email(email_match.group(0))
+        return None
+
+    def _extract_identity_from_json_texts(self, json_texts: Iterable[str]) -> Optional[str]:
+        for text in json_texts:
+            stripped = text.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            identity = self._find_identity(payload)
+            if identity:
+                return identity
+        return None
+
+    def _find_identity(self, payload: Any) -> Optional[str]:
+        return self._find_email_identity(payload) or self._find_label_identity(payload)
+
+    def _find_email_identity(self, payload: Any) -> Optional[str]:
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                key_lower = str(key).lower()
+                if isinstance(value, str):
+                    if "email" in key_lower and "@" in value:
+                        return self._mask_email(value)
+                nested = self._find_email_identity(value)
+                if nested:
+                    return nested
+        elif isinstance(payload, list):
+            for item in payload:
+                nested = self._find_email_identity(item)
+                if nested:
+                    return nested
+        elif isinstance(payload, str) and "@" in payload:
+            email_match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", payload)
+            if email_match:
+                return self._mask_email(email_match.group(0))
+        return None
+
+    def _find_label_identity(self, payload: Any) -> Optional[str]:
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                key_lower = str(key).lower()
+                if isinstance(value, str) and key_lower in {"username", "display_name", "name"} and value.strip():
+                    return self._mask_label(value)
+                nested = self._find_label_identity(value)
+                if nested:
+                    return nested
+        elif isinstance(payload, list):
+            for item in payload:
+                nested = self._find_label_identity(item)
+                if nested:
+                    return nested
+        return None
+
+    def _mask_email(self, email: str) -> str:
+        local, _, domain = email.strip().partition("@")
+        if not local or not domain:
+            return self._mask_label(email)
+        keep = min(4, max(1, len(local)))
+        return f"{local[:keep]}****@{domain}"
+
+    def _mask_label(self, value: str) -> str:
+        normalized = self._normalize_text(value)
+        if not normalized:
+            return ""
+        if len(normalized) <= 4:
+            return normalized
+        return f"{normalized[:4]}..."
 
     def _extract_usage_from_json_texts(self, json_texts: Iterable[str]) -> Optional[dict]:
         for text in json_texts:

@@ -25,6 +25,11 @@ html {
   background: #0c111b;
 }
 
+html.standalone,
+body.standalone {
+  min-height: -webkit-fill-available;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -35,12 +40,24 @@ body {
     linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
 }
 
+body.standalone {
+  min-height: -webkit-fill-available;
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 18px 12px 36px;
+}
+
+body.standalone .app-shell {
+  min-height: -webkit-fill-available;
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-right: max(10px, env(safe-area-inset-right));
+  padding-bottom: max(18px, env(safe-area-inset-bottom));
+  padding-left: max(10px, env(safe-area-inset-left));
 }
 
 .phone-frame {
@@ -386,9 +403,41 @@ h2 {
 }
 
 .metric-value {
-  font-size: 13px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-weight: 800;
   white-space: nowrap;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.metric-percent {
+  font-size: 28px;
+  line-height: 0.92;
+  letter-spacing: -0.04em;
+}
+
+.metric-suffix {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted-strong);
+}
+
+.metric-value.tier-75-plus {
+  color: #6fe8f3;
+}
+
+.metric-value.tier-50-75 {
+  color: #8bdd7d;
+}
+
+.metric-value.tier-25-50 {
+  color: #f7c968;
+}
+
+.metric-value.tier-25-below {
+  color: #ff8f88;
 }
 
 .metric-row {
@@ -451,10 +500,22 @@ h2 {
     overflow: hidden;
   }
 
+  body.standalone {
+    overflow: hidden;
+  }
+
   .app-shell {
     min-height: 100vh;
     align-items: stretch;
     padding: 8px;
+  }
+
+  body.standalone .app-shell {
+    min-height: -webkit-fill-available;
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-right: max(6px, env(safe-area-inset-right));
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    padding-left: max(6px, env(safe-area-inset-left));
   }
 
   .phone-frame {
@@ -656,7 +717,15 @@ h2 {
   }
 
   .metric-value {
-    font-size: 12px;
+    gap: 3px;
+  }
+
+  .metric-percent {
+    font-size: 20px;
+  }
+
+  .metric-suffix {
+    font-size: 9px;
   }
 
   .metric-subtitle {
@@ -739,7 +808,15 @@ h2 {
   }
 
   .phone-frame.single-account .metric-value {
-    font-size: 12px;
+    gap: 3px;
+  }
+
+  .phone-frame.single-account .metric-percent {
+    font-size: 22px;
+  }
+
+  .phone-frame.single-account .metric-suffix {
+    font-size: 10px;
   }
 
   .phone-frame.single-account .progress-track {

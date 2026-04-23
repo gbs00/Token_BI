@@ -19,6 +19,9 @@
 - [README.md](/Users/gbs00/我的文件夹/Projects/Token_BI/README.md)：需求与产品约束
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：技术架构说明
 - [config/accounts.json](/Users/gbs00/我的文件夹/Projects/Token_BI/config/accounts.json)：账号配置
+- [scripts/open_control_panel.command](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.command>)：Mac 本地控制台入口，双击即可启动控制页
+- [scripts/start_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/start_server.sh>)：启动 Token BI 主服务
+- [scripts/stop_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/stop_server.sh>)：停止 Token BI 主服务
 - `runtime/contexts/`：每个账号的浏览器 profile 目录
 - `runtime/logs/`：运行日志
 
@@ -108,26 +111,54 @@ EOF
 
 ## 3. 启动本地服务
 
-### 3.1 启动命令
+### 3.1 推荐方式：打开 Mac 本地控制台
+
+日常建议优先使用控制台，而不是手动敲命令：
+
+```bash
+/Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
+```
+
+也可以在 Finder 中双击：
+
+```text
+scripts/open_control_panel.command
+```
+
+控制台会打开：
+
+```text
+http://127.0.0.1:8790/
+```
+
+控制台能力：
+
+- 启动 Token BI
+- 停止 Token BI
+- 添加账号
+- 打开看板
+- 刷新状态并触发一次 usage 校验
+- 查看运行状态、PID、账号、固定入口、局域网入口和日志尾部
+
+控制台仅监听 `127.0.0.1`，只用于 Mac 本机操作。
+
+### 3.2 备用方式：命令行启动
 
 为了让手机能访问，服务必须监听 `0.0.0.0`，不能只监听 `127.0.0.1`。
 
 ```bash
-./.venv/bin/uvicorn app.main:app \
-  --app-dir /path/to/Token_BI \
-  --host 0.0.0.0 \
-  --port 8787
+/path/to/Token_BI/scripts/start_server.sh
 ```
 
 如果你已经在项目目录中：
 
 ```bash
-./.venv/bin/uvicorn app.main:app --app-dir "$(pwd)" --host 0.0.0.0 --port 8787
+./scripts/start_server.sh
 ```
 
 ---
 
-### 3.2 验证服务是否启动成功
+### 3.3 验证服务是否启动成功
 
 本机打开：
 
@@ -141,21 +172,52 @@ http://127.0.0.1:8787
 
 ## 4. 新机器首次接入真实账号
 
-### 4.1 创建账号记录
+### 4.1 推荐方式：使用控制台添加账号
 
-用脱敏邮箱创建账号：
+打开控制台后点击：
+
+```text
+添加账号
+```
+
+控制台会自动：
+
+- 确认 Token BI 主服务已启动
+- 创建一个待识别账号记录
+- 拉起独立 `Chrome` 登录窗口
+
+你只需要在新开的 `Chrome` 窗口里完成 ChatGPT/Codex 登录，并保持窗口不关闭。
+
+登录完成后，回到控制台点击：
+
+```text
+刷新状态
+```
+
+如果 usage 校验成功，系统会自动：
+
+- 读取当前账号的 usage
+- 识别账号标识
+- 脱敏后写入账号配置
+- 将账号状态更新为 `active`
+
+---
+
+### 4.2 备用方式：命令行创建账号记录
+
+也可以不传 `masked_email`，让系统先创建待识别账号：
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/v1/accounts \
   -H 'Content-Type: application/json' \
-  -d '{"masked_email":"8754****@qq.com"}'
+  -d '{}'
 ```
 
 返回里会有一个新的 `account_id`，后续都用它。
 
 ---
 
-### 4.2 启动登录流程
+### 4.3 启动登录流程
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
@@ -169,7 +231,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 ---
 
-### 4.3 在 Chrome 中手动登录
+### 4.4 在 Chrome 中手动登录
 
 用户需要在新开的 `Chrome` 窗口中完成：
 
@@ -183,7 +245,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 ---
 
-### 4.4 验证额度读取
+### 4.5 验证额度读取
 
 登录完成后执行：
 
@@ -199,6 +261,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/validate
 同时服务会：
 
 - 强制切到 `https://chatgpt.com/codex/cloud/settings/analytics#usage`
+- 从已登录会话中提取账号标识，并脱敏写回账号配置
 - 再显式刷新一次
 - 然后读取最新额度
 
@@ -282,14 +345,41 @@ http://10.124.4.70:8787/dashboard?account_id=<account_id>
 
 如果已经在当前这台电脑完成过登录，日常使用建议按这个顺序：
 
-### 6.1 启动服务
+### 6.1 打开控制台
 
-```bash
-cd /path/to/Token_BI
-./.venv/bin/uvicorn app.main:app --app-dir "$(pwd)" --host 0.0.0.0 --port 8787
+双击：
+
+```text
+scripts/open_control_panel.command
 ```
 
-### 6.2 启动账号浏览器窗口
+或命令行：
+
+```bash
+/Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
+```
+
+### 6.2 启动或停止主服务
+
+在控制台点击：
+
+- `启动 Token BI`
+- `停止 Token BI`
+- `添加账号`
+- `打开看板`
+- `刷新状态`
+
+### 6.3 固定看板入口
+
+手机端建议始终使用：
+
+```text
+http://gbs00MacBook-Air-M2.local:8787/dashboard
+```
+
+不建议再把 `192.168.x.x` 这种动态 IP 地址添加到主屏幕。
+
+### 6.4 启动账号浏览器窗口
 
 如果浏览器窗口不在了，需要重新拉起：
 
@@ -297,7 +387,9 @@ cd /path/to/Token_BI
 curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 ```
 
-### 6.3 如果窗口已经存在
+正常情况下，主服务启动时会自动尝试恢复或拉起 `active` 账号的 worker。
+
+### 6.5 如果窗口已经存在
 
 系统会优先尝试“认领”这扇已存在的浏览器窗口，而不是重复启动一份。
 
@@ -309,7 +401,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 ---
 
-### 6.4 每次刷新前都会自动做什么
+### 6.6 每次刷新前都会自动做什么
 
 当前真实链路下，每次读取前都会：
 
@@ -320,6 +412,20 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 5. 读取失败再降级到 `DOM fallback`
 
 这也是为了避免停留在 `chatgpt.com/#usage` 首页时拿到旧数据或非数据页。
+
+### 6.7 手机页面刷新策略
+
+手机页面不会再每 `3 分钟` 整页刷新。
+
+现在采用：
+
+- 后台请求 `/api/v1/dashboard`
+- 原地更新账号、状态、更新时间、来源、百分比、进度条和重置时间
+- 服务短暂重启时保留当前内容
+- 请求失败后显示 `Connection interrupted. Retrying automatically...`
+- 失败后每 `15 秒` 自动重试
+
+这样可以避免 iPhone 主屏幕页面在服务重启瞬间卡进系统级“服务器无响应”页。
 
 ---
 
@@ -333,13 +439,15 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 - `Chrome` 仍保持同一 `CDP` 端口
 - 对应账号 profile 目录一致
 
-那么服务重启后，重新调用一次：
+那么服务重启后通常会自动接回现有窗口。
+
+如果没有接回，再手动调用：
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 ```
 
-系统通常可以重新接管现有窗口。
+或在控制台中重新启动 Token BI。
 
 ---
 
@@ -420,6 +528,18 @@ curl http://<mac-lan-ip>:8787/api/v1/accounts
 - 服务是否监听 `0.0.0.0`
 - macOS 防火墙
 - 手机和 Mac 是否在同一网络
+
+### 8.5 主屏幕图标打开后提示服务器无响应
+
+优先确认：
+
+- Token BI 主服务是否在控制台中显示为 `运行中`
+- 手机打开的是固定入口 `http://gbs00MacBook-Air-M2.local:8787/dashboard`
+- 不要使用旧的 `127.0.0.1` 或旧 IP 主屏幕图标
+
+如果旧图标是用 `192.168.x.x` 添加的，建议删掉后用 `.local` 地址重新添加。
+
+如果服务正在重启中，页面会保留当前内容并自动重试；但如果是在服务完全未启动时冷打开主屏幕图标，iOS 仍可能先显示系统级无响应页。
 
 ---
 

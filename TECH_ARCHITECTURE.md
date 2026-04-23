@@ -35,7 +35,9 @@
 - `最近更新时间`
 - `Open Usage` 外链入口
 - 局域网内访问
-- 手动启动服务
+- Mac 本地控制台启动/停止服务
+- 固定 `.local` 看板入口
+- iPhone 主屏幕 standalone 访问模式
 
 ### 2.3 明确不包含
 
@@ -57,6 +59,7 @@
 - 浏览器附着与抓取：`Playwright for Python (CDP attach)`
 - 前端形态：`SSR HTML + 少量原生 JavaScript`
 - 运行方式：`Mac` 本地进程
+- 本地控制台：独立 `ThreadingHTTPServer`，仅监听 `127.0.0.1`
 - 会话存储：项目目录下本地文件夹
 - 缓存策略：进程内内存缓存
 
@@ -73,6 +76,7 @@
 flowchart LR
     A["iPhone 5s Safari"] --> B["FastAPI Dashboard Service on Mac"]
     C["Mac Browser (Optional)"] --> B
+    L["Mac Local Control Panel"] --> B
     B --> D["Account Registry"]
     B --> E["In-Memory Cache"]
     B --> F["Usage Connector Manager"]
@@ -87,6 +91,7 @@ flowchart LR
 
 - `iPhone 5s` 不运行抓取逻辑，只访问 `Mac` 上提供的网页
 - `FastAPI Dashboard Service` 是整个系统中心
+- `Mac Local Control Panel` 只用于本机启动/停止主服务、查看状态、打开看板，不暴露到局域网
 - `Account Registry` 保存账号配置元信息
 - `Usage Connector Manager` 统一调度多个 usage 数据来源
 - `Browser Worker Service` 管理 `Live Browser Connector` 所需的每个账号独立浏览器和 `CDP` 端口
@@ -94,6 +99,7 @@ flowchart LR
 - `Local Codex Connector` 用于未来接入本机 Codex/CLI 侧快照
 - `Codex Analytics Page` 是 MVP 当前主数据来源
 - 系统不再把“浏览器关闭后仍可复用登录态”作为主前提，而是依赖长驻 worker 保活
+- 服务重启后会尝试恢复现存 worker；若不存在，则为 `active` 账号拉起新的 worker
 
 ## 5. 系统边界
 
@@ -148,7 +154,14 @@ Token_BI/
 │   │   └── partials/
 │   └── static/
 │       ├── css/
-│       └── js/
+│       ├── js/
+│       └── site.webmanifest
+├── scripts/
+│   ├── start_server.sh
+│   ├── stop_server.sh
+│   ├── control_panel.py
+│   ├── open_control_panel.sh
+│   └── open_control_panel.command
 ├── runtime/
 │   ├── contexts/
 │   │   ├── acc_001/
@@ -166,6 +179,11 @@ Token_BI/
 - `runtime/cache/`：可选，用于非关键运行时临时文件
 - `runtime/logs/`：运行日志
 - `config/accounts.json`：账号元信息配置
+- `scripts/start_server.sh`：启动主看板服务
+- `scripts/stop_server.sh`：停止主看板服务
+- `scripts/control_panel.py`：Mac 本地控制台服务
+- `scripts/open_control_panel.command`：双击打开控制台
+- `app/static/site.webmanifest`：主屏幕 standalone 元信息
 
 ### 6.2 版本管理建议
 
@@ -190,6 +208,33 @@ Token_BI/
 建议入口：
 
 - `app/main.py`
+
+## 7.1.1 Local Control Panel
+
+职责：
+
+- 仅在 Mac 本机提供控制页面
+- 显示 Token BI 主服务运行状态、PID、账号摘要、固定入口、局域网入口和日志尾部
+- 提供启动主服务、停止主服务、打开看板、刷新状态按钮
+
+实现约束：
+
+- 默认监听 `127.0.0.1:8790`
+- 不对局域网开放
+- 通过 `scripts/start_server.sh` 和 `scripts/stop_server.sh` 管理主服务
+- 通过 `scripts/open_control_panel.command` 作为用户可双击入口
+
+## 7.1.2 固定入口
+
+手机端优先使用 Bonjour 主机名：
+
+`http://gbs00MacBook-Air-M2.local:8787/dashboard`
+
+说明：
+
+- `/` 固定重定向到 `/dashboard`
+- 单账号场景下无需在 URL 中携带 `account_id`
+- 当局域网 IP 变化时，`.local` 地址仍应保持稳定
 
 ## 7.2 Account Service
 
@@ -369,26 +414,33 @@ MVP 状态：
 ```mermaid
 sequenceDiagram
     participant User as User on Mac
-    participant UI as Account Setup UI
+    participant UI as Local Control Panel
+    participant API as Token BI API
     participant Session as Session Service
     participant Worker as Browser Worker Service
     participant Codex as Codex Login Page
 
-    User->>UI: Click Add Account
-    UI->>Session: create_context(account_id)
-    Session->>Worker: start_login_session(account_id)
+    User->>UI: Click 添加账号
+    UI->>API: POST /api/v1/accounts {}
+    API->>Session: create_context(account_id)
+    UI->>API: POST /api/v1/accounts/{id}/reauth
+    API->>Worker: start_login_session(account_id)
     Worker->>Codex: launch normal browser with CDP port
     User->>Codex: manual login
-    Worker->>Codex: attach via CDP
+    User->>UI: Click 刷新状态
+    UI->>API: POST /api/v1/dashboard/refresh
+    API->>Worker: attach via CDP
     Worker->>Codex: validate analytics access
-    Worker->>UI: account active
+    Worker->>Codex: read usage and account identity
+    API->>UI: account active with masked identity
 ```
 
 关键点：
 
 - 登录由用户手动完成
-- 系统负责拉起普通浏览器、附着 CDP 和校验
-- 成功后写入账号元信息与 context 路径
+- 控制台不要求用户输入邮箱；首次只创建待识别账号
+- 系统负责拉起普通浏览器、附着 CDP、校验 usage，并从已登录会话提取账号标识
+- 成功后只写入脱敏账号标识、账号元信息与 context 路径
 - 不再要求浏览器关闭后还能单独复用该登录态
 
 ## 8.2 查看看板
@@ -457,13 +509,14 @@ MVP 采用：
 
 职责：
 
-- 重定向到默认账号看板
+- 固定重定向到 `/dashboard`
+- 不拼接 `account_id`，保证手机主屏幕入口稳定
 
 ### `GET /dashboard`
 
 参数：
 
-- `account_id`
+- `account_id` 可选
 
 职责：
 
@@ -476,6 +529,7 @@ MVP 采用：
 - 额度卡片
 - 最近更新时间
 - `Open Usage`
+- 单账号场景下自动选择可见账号，无需 URL 带账号 ID
 
 ## 9.2 API 路由
 
@@ -505,6 +559,8 @@ MVP 采用：
 
 返回单账号当前额度数据。
 
+前端每 `180 秒` 后台请求该接口并原地更新页面，不再整页 `reload`。
+
 ### `POST /api/v1/accounts`
 
 职责：
@@ -526,6 +582,7 @@ MVP 采用：
 
 - 返回该账号对应的 live worker 状态
 - 供后端和调试工具确认 worker 是否仍存活
+- 如果内存中没有该 session，会尝试从现有 Chrome CDP 进程恢复
 
 ### `POST /api/v1/accounts/{account_id}/reauth`
 
@@ -533,6 +590,26 @@ MVP 采用：
 
 - 重新拉起该账号的 live browser worker
 - 让用户在 `Mac` 上重新登录
+
+### `POST /api/v1/dashboard/refresh`
+
+职责：
+
+- 强制刷新当前账号 usage
+- 跳过短时缓存
+- 主要供调试和手动刷新流程使用
+
+### 本地控制台接口
+
+本地控制台由 `scripts/control_panel.py` 提供，默认监听 `127.0.0.1:8790`。
+
+- `GET /`：输出控制台页面
+- `GET /api/status`：返回主服务运行状态、账号摘要、固定入口、局域网入口、日志尾部
+- `POST /api/start`：调用 `scripts/start_server.sh`
+- `POST /api/stop`：调用 `scripts/stop_server.sh`
+- `POST /api/add-account`：确保主服务运行，创建待识别账号，并拉起 Chrome 登录 worker
+- `POST /api/refresh-status`：对现有账号执行一次 dashboard refresh，成功时同步脱敏账号信息和 usage 状态
+- `POST /api/open-dashboard`：在 Mac 上打开固定看板入口
 
 ## 10. 配置文件设计
 
@@ -545,8 +622,8 @@ MVP 采用：
   "accounts": [
     {
       "account_id": "acc_001",
-      "account_alias": "主账号",
-      "masked_email": "guo****@gmail.com",
+      "account_alias": "user****@example.com",
+      "masked_email": "user****@example.com",
       "status": "active",
       "session_storage_path": "/Users/gbs00/我的文件夹/Projects/Token_BI/runtime/contexts/acc_001",
       "created_at": "2026-04-21T23:00:00+08:00",
@@ -560,6 +637,7 @@ MVP 采用：
 
 - 文件仅保存元信息
 - 不保存明文密码
+- 控制台添加账号时可先写入 `Signing in ...` 占位，验证成功后再替换成自动识别到的脱敏账号标识
 - 敏感 session 数据只在 `runtime/contexts/` 中
 
 ## 11. 运行态设计
@@ -646,6 +724,19 @@ MVP 采用：
 - `Open Codex on Mac and complete first sync`
 - `Unable to read Codex usage right now`
 - `Analytics page may have changed`
+- `Connection interrupted. Retrying automatically...`
+
+### 12.5 移动端恢复策略
+
+移动端页面不再定时整页刷新，而是：
+
+1. 保留当前 HTML 与已有额度值
+2. 每 `180 秒` 请求 `/api/v1/dashboard`
+3. 请求成功时原地更新账号、状态、更新时间、来源、额度百分比、进度条和重置时间
+4. 请求失败时显示 `Connection interrupted. Retrying automatically...`
+5. 失败后每 `15 秒` 重试一次
+
+这样可以避免服务重启瞬间导致 iOS 主屏幕页面落入系统级“服务器无响应”页。
 
 ## 13. 安全约束
 
@@ -673,26 +764,50 @@ MVP 采用：
 
 ## 14.1 启动方式
 
-MVP 采用手动启动：
+MVP 当前采用 Mac 本地控制台启动：
 
-1. 用户在 `Mac` 上启动服务
-2. 服务开始监听局域网地址
-3. 用户使用 `iPhone 5s` 打开局域网地址
+1. 用户双击 `scripts/open_control_panel.command`
+2. 控制台打开 `http://127.0.0.1:8790/`
+3. 用户点击 `启动 Token BI`
+4. 主服务监听 `0.0.0.0:8787`
+5. 用户使用 `iPhone 5s` 打开固定 `.local` 地址
 
-只要用户不关闭服务，它就持续运行。
+控制台本身仅监听 `127.0.0.1`，用于 Mac 本机操作；主看板服务监听局域网地址，供手机访问。
 
 ## 14.2 访问方式
 
 示例地址：
 
-- `http://192.168.1.23:8787`
-- `http://codex-bi.local:8787`
+- 固定入口：`http://gbs00MacBook-Air-M2.local:8787/dashboard`
+- 本机入口：`http://127.0.0.1:8787/dashboard`
+- 局域网 IP 入口：`http://192.168.x.x:8787/dashboard`
 
 说明：
 
 - 不需要数据线
 - 不需要将网页安装到手机
 - 实际运行位置仍在 `Mac`
+- 推荐用固定 `.local` 地址添加到 iPhone 主屏幕
+- Safari 不支持网页按横竖屏分别控制浏览器栏；若希望横屏无浏览器栏，应从主屏幕图标启动 standalone 模式
+
+## 14.3 服务与 worker 生命周期
+
+- Token BI 主服务停止时，不主动杀掉已登录的 Chrome worker
+- Token BI 主服务启动时，会扫描 `active` 账号并尝试恢复或拉起对应 worker
+- 如果 Chrome worker 仍存在且 CDP 端口可访问，服务会直接接回
+- 如果 Chrome worker 不存在，服务会根据账号的 `session_storage_path` 拉起新 worker
+- 如果登录态失效，页面进入 `reauth_required` 或 `error` 状态，用户需要在 Mac 上重新登录
+
+## 14.4 额度视觉规则
+
+`remaining_pct` 的视觉分档：
+
+- `> 75%`：亮青色，状态健康
+- `> 50% 且 <= 75%`：绿色，状态正常
+- `> 25% 且 <= 50%`：黄色，提醒关注
+- `<= 25%`：红色，额度紧张
+
+百分比数字应是指标卡内最突出的信息，`left` 作为辅助尾标显示。
 
 ## 15. 开发顺序建议
 

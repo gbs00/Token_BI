@@ -35,5 +35,17 @@ class ServiceContainer:
             connector_manager=self.usage_connector_manager,
         )
 
+    def startup(self) -> None:
+        for account in self.account_service.list_visible_accounts():
+            if account.status.value != "active":
+                continue
+            try:
+                self.browser_worker_service.ensure_worker_for_account(
+                    account,
+                    target_url=self.settings.analytics_url,
+                )
+            except Exception:
+                continue
+
     def shutdown(self) -> None:
         self.browser_worker_service.shutdown()

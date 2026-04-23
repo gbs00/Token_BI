@@ -70,7 +70,7 @@ def get_account_session(request: Request, account_id: str) -> dict:
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
-    session = container.browser_worker_service.get_session_snapshot(account_id)
+    session = container.browser_worker_service.restore_session_snapshot(account)
     return {
         "account_id": account_id,
         "session": session.model_dump(mode="json") if session else None,
