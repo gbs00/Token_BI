@@ -1,0 +1,18 @@
+[package]
+name = "token-bi"
+version = "0.7.0"
+description = "Token BI desktop app shell"
+authors = ["gbs00"]
+edition = "2021"
+
+[lib]
+name = "token_bi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+url = "2"
