@@ -10,7 +10,7 @@
 - 项目目录已经拿到本地
 - 使用 `Google Chrome`
 - `Mac` 作为本地服务端
-- `iPhone` 只负责通过局域网访问看板
+- 副屏设备只负责通过局域网访问看板，可包括 iPhone、Android 手机、小米手机、平板、旧手机、旧电脑等
 
 ---
 
@@ -18,16 +18,22 @@
 
 - [README.md](/Users/gbs00/我的文件夹/Projects/Token_BI/README.md)：需求与产品约束
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：技术架构说明
+- [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
+- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target/release/bundle/macos/Token BI.app>)：Mac App 原型入口，双击后打开内嵌控制台
+- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/Token BI.app>)：项目根目录中的便捷 App 副本
+- [docs/RELEASE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/RELEASE.md)：DMG、本地 release、签名、公证和 GitHub updater 发布说明
 - [config/accounts.json](/Users/gbs00/我的文件夹/Projects/Token_BI/config/accounts.json)：账号配置
 - [scripts/open_control_panel.command](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.command>)：Mac 本地控制台入口，双击即可启动控制页
 - [scripts/start_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/start_server.sh>)：启动 Token BI 主服务
 - [scripts/stop_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/stop_server.sh>)：停止 Token BI 主服务
 - `runtime/contexts/`：每个账号的浏览器 profile 目录
 - `runtime/logs/`：运行日志
+- `~/Library/Application Support/Token BI/`：产品化 App 默认用户数据目录
 
 要特别注意：
 
-- `config/accounts.json` 里会记录绝对路径
+- 开发目录中的 `config/accounts.json` 里会记录绝对路径
+- 产品化 App 会优先使用 `~/Library/Application Support/Token BI/config/accounts.json`
 - `runtime/contexts/` 里的浏览器数据和机器环境强相关
 - 换电脑后，不建议直接复用旧机器的 `runtime/contexts/`
 
@@ -46,11 +52,17 @@
 
 - `Python 3.9+`
 - `Google Chrome`
+- `Node.js + npm`
+- `Rust/Cargo`，用于构建 `Token BI.app`
 
 可检查版本：
 
 ```bash
 python3 --version
+node --version
+npm --version
+rustc --version
+cargo --version
 ```
 
 ---
@@ -70,12 +82,18 @@ python3 -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/playwright install chromium
+npm install
+npm run app:build
 ```
 
 说明：
 
 - 虽然当前主链路是 `Chrome + CDP attach`
 - 但项目仍然依赖 `playwright` Python 包来连接浏览器调试端口
+- `npm run app:build` 会生成 `Token BI.app`
+- App 构建产物位于 `src-tauri/target/release/bundle/macos/Token BI.app`
+- 为了方便本机使用，可将构建产物复制到项目根目录 `Token BI.app`
+- 当前产品化基础版已将 Python 后端打包为 sidecar；开发构建仍需要本机具备 Python/Node/Rust，最终用户运行 DMG 不应再理解这些开发依赖
 
 ---
 
@@ -111,9 +129,40 @@ EOF
 
 ## 3. 启动本地服务
 
-### 3.1 推荐方式：打开 Mac 本地控制台
+### 3.1 推荐方式：打开 Token BI.app
 
-日常建议优先使用控制台，而不是手动敲命令：
+日常建议优先双击：
+
+```text
+src-tauri/target/release/bundle/macos/Token BI.app
+```
+
+App 会自动：
+
+- 启动控制台服务 `127.0.0.1:8790`
+- 在 App 窗口内显示控制台
+- 让用户通过按钮启动或停止 `8787` 主看板服务
+
+关闭 `Token BI.app` 时，系统会停止控制台、停止主看板服务，并关闭 Token BI 管理的 Chrome worker，避免后台长期占用端口和浏览器资源。
+
+### 3.1.1 当前 App 分发边界
+
+当前 `Token BI.app` 已具备产品化基础能力：
+
+- 可以生成 `.app` 和 `.dmg`
+- Python 后端被打包为 `token-bi-backend` sidecar
+- 控制台和主服务由 App/sidecar 管理，不要求用户手动运行项目脚本
+- 用户数据默认保存到 `~/Library/Application Support/Token BI/`
+
+如果希望其他普通 Mac 用户下载后开箱即用，后续需要升级为自包含 App：
+
+- 配置 Developer ID 签名和 notarization，降低 macOS Gatekeeper 拦截概率
+- 生成正式 GitHub Releases updater manifest
+- 用真实干净机器验证从 DMG 拖拽安装到 `/Applications`
+
+### 3.2 备用方式：打开 Mac 本地控制台
+
+如果暂时不使用 App，也可以打开控制台脚本：
 
 ```bash
 /Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
@@ -137,14 +186,15 @@ http://127.0.0.1:8790/
 - 停止 Token BI
 - 添加账号
 - 打开看板
+- 扫码连接副屏
 - 刷新状态并触发一次 usage 校验
 - 查看运行状态、PID、账号、固定入口、局域网入口和日志尾部
 
 控制台仅监听 `127.0.0.1`，只用于 Mac 本机操作。
 
-### 3.2 备用方式：命令行启动
+### 3.3 备用方式：命令行启动
 
-为了让手机能访问，服务必须监听 `0.0.0.0`，不能只监听 `127.0.0.1`。
+为了让副屏设备能访问，服务必须监听 `0.0.0.0`，不能只监听 `127.0.0.1`。
 
 ```bash
 /path/to/Token_BI/scripts/start_server.sh
@@ -158,7 +208,7 @@ http://127.0.0.1:8790/
 
 ---
 
-### 3.3 验证服务是否启动成功
+### 3.4 验证服务是否启动成功
 
 本机打开：
 
@@ -183,7 +233,9 @@ http://127.0.0.1:8787
 控制台会自动：
 
 - 确认 Token BI 主服务已启动
-- 创建一个待识别账号记录
+- 先检查已有账号 worker 是否已经能读取 usage
+- 如果已有 worker 可用，直接复用该窗口并刷新 usage
+- 如果没有可用 worker，创建一个待识别账号记录
 - 拉起独立 `Chrome` 登录窗口
 
 你只需要在新开的 `Chrome` 窗口里完成 ChatGPT/Codex 登录，并保持窗口不关闭。
@@ -277,7 +329,7 @@ http://127.0.0.1:8787/dashboard?account_id=<account_id>
 
 ---
 
-## 5. 手机如何访问
+## 5. 副屏设备如何访问
 
 ### 5.1 不能使用 `127.0.0.1`
 
@@ -286,9 +338,9 @@ http://127.0.0.1:8787/dashboard?account_id=<account_id>
 `127.0.0.1` 永远只代表“当前设备自己”：
 
 - Mac 上的 `127.0.0.1` 是 Mac
-- iPhone 上的 `127.0.0.1` 是 iPhone
+- iPhone / Android / 平板上的 `127.0.0.1` 是它自己
 
-所以手机不能访问：
+所以副屏设备不能访问：
 
 ```text
 http://127.0.0.1:8787/...
@@ -296,7 +348,7 @@ http://127.0.0.1:8787/...
 
 ---
 
-### 5.2 要使用 Mac 的局域网 IP
+### 5.2 要使用 Mac 的局域网 IP 或 `.local` 地址
 
 先在 Mac 上查 IP：
 
@@ -316,10 +368,10 @@ ipconfig getifaddr en0
 10.124.4.70
 ```
 
-那么手机应访问：
+那么副屏设备应访问：
 
 ```text
-http://10.124.4.70:8787/dashboard?account_id=<account_id>
+http://10.124.4.70:8787/dashboard
 ```
 
 ---
@@ -331,13 +383,13 @@ http://10.124.4.70:8787/dashboard?account_id=<account_id>
 - 手机开热点
 - Mac 连接手机热点
 
-那么手机和 Mac 通常仍然处于同一个小型局域网络里。
+那么开热点的手机和 Mac 通常仍然处于同一个小型局域网络里，其他连接该热点的设备也是同理。
 
 前提是：
 
 - 服务监听的是 `0.0.0.0`
 - Mac 防火墙没有拦截 `8787`
-- 手机浏览器访问的是 `Mac IP`，不是 `127.0.0.1`
+- 副屏设备浏览器访问的是 `Mac IP` 或 `.local` 地址，不是 `127.0.0.1`
 
 ---
 
@@ -345,7 +397,17 @@ http://10.124.4.70:8787/dashboard?account_id=<account_id>
 
 如果已经在当前这台电脑完成过登录，日常使用建议按这个顺序：
 
-### 6.1 打开控制台
+### 6.1 打开 Token BI.app
+
+优先双击：
+
+```text
+src-tauri/target/release/bundle/macos/Token BI.app
+```
+
+如果只是临时调试，也可以继续使用控制台脚本。
+
+### 6.2 打开控制台备用入口
 
 双击：
 
@@ -359,7 +421,7 @@ scripts/open_control_panel.command
 /Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
 ```
 
-### 6.2 启动或停止主服务
+### 6.3 启动或停止主服务
 
 在控制台点击：
 
@@ -367,19 +429,31 @@ scripts/open_control_panel.command
 - `停止 Token BI`
 - `添加账号`
 - `打开看板`
+- `扫码连接副屏`
 - `刷新状态`
 
-### 6.3 固定看板入口
+### 6.4 扫码连接副屏
 
-手机端建议始终使用：
+控制台中的 `扫码连接副屏` 会展示两个二维码：
+
+- `固定入口`：`http://<MacLocalName>.local:8787/dashboard`，推荐长期使用
+- `局域网入口`：`http://<Mac局域网IP>:8787/dashboard`，用于 `.local` 解析失败时备用
+
+副屏设备需要和 Mac 处在同一 Wi-Fi / 同一局域网。扫码只负责打开看板地址，usage 数据仍然由 Mac 上的 Token BI 主服务读取。
+
+如果主服务没有启动，二维码仍可展示和复制，但副屏设备打开时会显示无法连接。此时先回到控制台点击 `启动 Token BI`。
+
+### 6.5 固定看板入口
+
+副屏设备建议始终使用：
 
 ```text
 http://gbs00MacBook-Air-M2.local:8787/dashboard
 ```
 
-不建议再把 `192.168.x.x` 这种动态 IP 地址添加到主屏幕。
+不建议再把 `192.168.x.x` 这种动态 IP 地址添加到主屏幕或浏览器快捷方式。
 
-### 6.4 启动账号浏览器窗口
+### 6.6 启动账号浏览器窗口
 
 如果浏览器窗口不在了，需要重新拉起：
 
@@ -389,7 +463,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 正常情况下，主服务启动时会自动尝试恢复或拉起 `active` 账号的 worker。
 
-### 6.5 如果窗口已经存在
+### 6.7 如果窗口已经存在
 
 系统会优先尝试“认领”这扇已存在的浏览器窗口，而不是重复启动一份。
 
@@ -401,7 +475,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 ---
 
-### 6.6 每次刷新前都会自动做什么
+### 6.8 每次刷新前都会自动做什么
 
 当前真实链路下，每次读取前都会：
 
@@ -413,9 +487,9 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 这也是为了避免停留在 `chatgpt.com/#usage` 首页时拿到旧数据或非数据页。
 
-### 6.7 手机页面刷新策略
+### 6.9 副屏页面刷新策略
 
-手机页面不会再每 `3 分钟` 整页刷新。
+副屏页面不会再每 `3 分钟` 整页刷新。
 
 现在采用：
 
@@ -425,7 +499,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 - 请求失败后显示 `Connection interrupted. Retrying automatically...`
 - 失败后每 `15 秒` 自动重试
 
-这样可以避免 iPhone 主屏幕页面在服务重启瞬间卡进系统级“服务器无响应”页。
+这样可以避免副屏设备页面在服务重启瞬间卡进系统级“服务器无响应”页。
 
 ---
 
@@ -509,7 +583,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/validate
 
 ---
 
-### 8.4 手机能访问 Mac 吗
+### 8.4 副屏设备能访问 Mac 吗
 
 先在 Mac 上自检：
 
@@ -527,19 +601,19 @@ curl http://<mac-lan-ip>:8787/api/v1/accounts
 
 - 服务是否监听 `0.0.0.0`
 - macOS 防火墙
-- 手机和 Mac 是否在同一网络
+- 副屏设备和 Mac 是否在同一网络
 
-### 8.5 主屏幕图标打开后提示服务器无响应
+### 8.5 主屏幕或快捷方式打开后提示服务器无响应
 
 优先确认：
 
 - Token BI 主服务是否在控制台中显示为 `运行中`
-- 手机打开的是固定入口 `http://gbs00MacBook-Air-M2.local:8787/dashboard`
+- 副屏设备打开的是固定入口 `http://gbs00MacBook-Air-M2.local:8787/dashboard`
 - 不要使用旧的 `127.0.0.1` 或旧 IP 主屏幕图标
 
-如果旧图标是用 `192.168.x.x` 添加的，建议删掉后用 `.local` 地址重新添加。
+如果旧图标或快捷方式是用 `192.168.x.x` 添加的，建议删掉后用 `.local` 地址重新添加。
 
-如果服务正在重启中，页面会保留当前内容并自动重试；但如果是在服务完全未启动时冷打开主屏幕图标，iOS 仍可能先显示系统级无响应页。
+如果服务正在重启中，页面会保留当前内容并自动重试；但如果是在服务完全未启动时冷打开主屏幕图标或快捷方式，设备浏览器仍可能先显示系统级无响应页。
 
 ---
 

@@ -10,10 +10,11 @@
 - 每个模块负责什么
 - 数据从哪里来，如何流动
 - 多账号 session 如何管理
-- 页面如何被 `iPhone 5s` 访问
+- 页面如何被同局域网副屏设备访问
 - 出错时系统应该如何表现
 
 本文件默认以 [README.md](/Users/gbs00/我的文件夹/Projects/Token_BI/README.md) 为需求输入，并以其当前确认项为准。
+版本变化参考 [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)。
 
 ## 2. MVP 范围
 
@@ -23,7 +24,7 @@
 
 - 管理多个 `Codex` 订阅账号的登录态
 - 实时抓取所选账号的当前额度数据
-- 向 `iPhone 5s` 提供一个局域网可访问的 H5 看板
+- 向任意同局域网副屏设备提供一个可访问的 H5 看板
 
 ### 2.2 明确包含
 
@@ -36,13 +37,14 @@
 - `Open Usage` 外链入口
 - 局域网内访问
 - Mac 本地控制台启动/停止服务
+- `Token BI.app` Mac 桌面壳层
 - 固定 `.local` 看板入口
-- iPhone 主屏幕 standalone 访问模式
+- iPhone / Android 主屏幕或快捷方式访问模式
 
 ### 2.3 明确不包含
 
 - 公网访问
-- 原生 iOS App
+- 原生 iOS / Android App
 - `7 日用量统计`
 - `skills` 统计
 - 历史数据持久化
@@ -59,22 +61,29 @@
 - 浏览器附着与抓取：`Playwright for Python (CDP attach)`
 - 前端形态：`SSR HTML + 少量原生 JavaScript`
 - 运行方式：`Mac` 本地进程
+- Mac App 壳层：`Tauri 2`
+- App 后端封装：`PyInstaller sidecar`
 - 本地控制台：独立 `ThreadingHTTPServer`，仅监听 `127.0.0.1`
-- 会话存储：项目目录下本地文件夹
+- 会话存储：`~/Library/Application Support/Token BI/runtime/contexts`
 - 缓存策略：进程内内存缓存
 
 选择该组合的原因：
 
 - `FastAPI` 足够轻，适合本地工具型服务
 - `Playwright` 在当前方案中只负责通过 `CDP` 附着到普通浏览器并抓取页面
-- `SSR` 有利于兼容 `iPhone 5s / iOS 12 Safari`
+- `SSR` 有利于兼容旧设备浏览器，首期以 `iPhone 5s / iOS 12 Safari` 作为下限基准
+- `Tauri` 作为 Mac 本地控制台壳层和 sidecar supervisor，不改变副屏访问方式
+- `PyInstaller` 将 Python 后端打包为 App 内部 sidecar，降低普通用户安装门槛
 - 无需数据库即可完成 MVP
 
 ## 4. 总体架构
 
 ```mermaid
 flowchart LR
-    A["iPhone 5s Safari"] --> B["FastAPI Dashboard Service on Mac"]
+    T["Token BI.app (Tauri Shell)"] --> S["token-bi-backend Sidecar"]
+    S --> L["Mac Local Control Panel"]
+    S --> B["FastAPI Dashboard Service on Mac"]
+    A["LAN Sidecar Browser Device"] --> B["FastAPI Dashboard Service on Mac"]
     C["Mac Browser (Optional)"] --> B
     L["Mac Local Control Panel"] --> B
     B --> D["Account Registry"]
@@ -89,8 +98,10 @@ flowchart LR
 
 ### 4.1 架构解释
 
-- `iPhone 5s` 不运行抓取逻辑，只访问 `Mac` 上提供的网页
+- 副屏设备不运行抓取逻辑，只访问 `Mac` 上提供的网页
 - `FastAPI Dashboard Service` 是整个系统中心
+- `Token BI.app` 是推荐的 Mac 端入口，负责拉起控制台并在退出时释放本项目运行资源
+- `token-bi-backend` sidecar 提供控制台、主服务、迁移和健康检查 CLI
 - `Mac Local Control Panel` 只用于本机启动/停止主服务、查看状态、打开看板，不暴露到局域网
 - `Account Registry` 保存账号配置元信息
 - `Usage Connector Manager` 统一调度多个 usage 数据来源
@@ -115,7 +126,7 @@ flowchart LR
 
 - `Codex / ChatGPT` 网页登录态
 - `Mac` 网络环境
-- `iPhone 5s` Safari
+- iPhone / Android / 平板 / 旧电脑等副屏设备浏览器
 - 同一局域网下的访问能力
 
 ### 5.3 非目标
@@ -159,9 +170,19 @@ Token_BI/
 ├── scripts/
 │   ├── start_server.sh
 │   ├── stop_server.sh
+│   ├── start_control_panel.sh
+│   ├── stop_control_panel.sh
+│   ├── stop_app_services.sh
 │   ├── control_panel.py
 │   ├── open_control_panel.sh
 │   └── open_control_panel.command
+├── desktop/
+│   └── index.html
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── icons/
+│   └── src/
 ├── runtime/
 │   ├── contexts/
 │   │   ├── acc_001/
@@ -181,8 +202,15 @@ Token_BI/
 - `config/accounts.json`：账号元信息配置
 - `scripts/start_server.sh`：启动主看板服务
 - `scripts/stop_server.sh`：停止主看板服务
+- `scripts/start_control_panel.sh`：启动控制台但不打开系统浏览器，供 `Token BI.app` 调用
+- `scripts/stop_control_panel.sh`：停止控制台服务
+- `scripts/stop_app_services.sh`：App 退出时停止控制台、主服务和 Token BI 管理的 Chrome worker
 - `scripts/control_panel.py`：Mac 本地控制台服务
 - `scripts/open_control_panel.command`：双击打开控制台
+- `src-tauri/`：`Token BI.app` Tauri 壳层工程
+- `src-tauri/icons/icon.png`：App icon 源图
+- `src-tauri/icons/icon.icns`：macOS App bundle 图标
+- `desktop/`：App 窗口初始化页
 - `app/static/site.webmanifest`：主屏幕 standalone 元信息
 
 ### 6.2 版本管理建议
@@ -192,6 +220,8 @@ Token_BI/
 - `runtime/contexts/`
 - `runtime/cache/`
 - `runtime/logs/`
+- `node_modules/`
+- `src-tauri/target/`
 - 含敏感信息的配置文件
 
 ## 7. 核心模块设计
@@ -215,18 +245,52 @@ Token_BI/
 
 - 仅在 Mac 本机提供控制页面
 - 显示 Token BI 主服务运行状态、PID、账号摘要、固定入口、局域网入口和日志尾部
-- 提供启动主服务、停止主服务、打开看板、刷新状态按钮
+- 提供启动主服务、停止主服务、添加账号、打开看板、扫码连接副屏、刷新状态按钮
 
 实现约束：
 
 - 默认监听 `127.0.0.1:8790`
 - 不对局域网开放
-- 通过 `scripts/start_server.sh` 和 `scripts/stop_server.sh` 管理主服务
-- 通过 `scripts/open_control_panel.command` 作为用户可双击入口
+- 产品化 App 内通过 `token-bi-backend main-server` 管理主服务
+- 开发目录仍保留 `scripts/open_control_panel.command` 作为备用入口
+
+## 7.1.1.1 Token BI.app
+
+职责：
+
+- 作为 Mac 用户的推荐启动入口
+- 启动并嵌入本地控制台 `http://127.0.0.1:8790/`
+- 关闭 App 时通过 `/api/app/shutdown` 停止控制台、停止 `8787` 主看板服务，并清理 Token BI 管理的 Chrome worker
+- 提供与项目视觉一致的 App icon 和桌面控制台体验
+
+实现约束：
+
+- 使用 `Tauri 2`
+- 使用 `tauri-plugin-shell` 拉起 App 内部 `token-bi-backend` sidecar
+- App 窗口加载控制台页面，不额外暴露公网能力
+- 不改变主看板 API、账号配置 schema 或副屏访问 URL
+- App 退出是“释放本项目运行资源”的强语义；若用户希望保留后台服务，应使用备用脚本方式而不是 App 入口
+- 当前 App 已可生成 unsigned DMG；正式分发仍需 Developer ID 签名、notarization 和 GitHub updater manifest
+
+## 7.1.1.2 控制台视觉与交互
+
+控制台页面由 `scripts/control_panel.py` 内嵌 HTML/CSS/JS 输出。
+
+当前视觉方向：
+
+- 深色桌面 App 风格
+- 顶部大标题与说明
+- 服务状态和当前账号双状态卡
+- 主操作按钮组：启动、停止、添加账号、打开看板、扫码连接副屏、刷新状态
+- 入口列表：固定入口、局域网入口、本机入口
+- 每个入口提供复制与打开按钮
+- 扫码连接弹窗：展示固定 `.local` 看板二维码，并提供局域网 IP 二维码作为备用
+- 运行日志面板与清空日志按钮
+- 底部状态栏显示本地服务状态、端口与模式
 
 ## 7.1.2 固定入口
 
-手机端优先使用 Bonjour 主机名：
+副屏设备优先使用 Bonjour 主机名：
 
 `http://gbs00MacBook-Air-M2.local:8787/dashboard`
 
@@ -235,6 +299,8 @@ Token_BI/
 - `/` 固定重定向到 `/dashboard`
 - 单账号场景下无需在 URL 中携带 `account_id`
 - 当局域网 IP 变化时，`.local` 地址仍应保持稳定
+- 控制台可为固定入口生成二维码，便于手机、平板、旧电脑等副屏设备快速接入
+- 当副屏设备不支持 `.local` 解析时，控制台提供局域网 IP 二维码作为备用入口
 
 ## 7.2 Account Service
 
@@ -421,24 +487,32 @@ sequenceDiagram
     participant Codex as Codex Login Page
 
     User->>UI: Click 添加账号
-    UI->>API: POST /api/v1/accounts {}
-    API->>Session: create_context(account_id)
-    UI->>API: POST /api/v1/accounts/{id}/reauth
-    API->>Worker: start_login_session(account_id)
-    Worker->>Codex: launch normal browser with CDP port
-    User->>Codex: manual login
-    User->>UI: Click 刷新状态
     UI->>API: POST /api/v1/dashboard/refresh
-    API->>Worker: attach via CDP
-    Worker->>Codex: validate analytics access
-    Worker->>Codex: read usage and account identity
-    API->>UI: account active with masked identity
+    API->>Worker: try existing account workers
+    alt Existing worker is ready
+        Worker->>Codex: refresh analytics usage
+        API->>UI: reuse existing worker
+    else No reusable worker
+        UI->>API: POST /api/v1/accounts {}
+        API->>Session: create_context(account_id)
+        UI->>API: POST /api/v1/accounts/{id}/reauth
+        API->>Worker: start_login_session(account_id)
+        Worker->>Codex: launch normal browser with CDP port
+        User->>Codex: manual login
+        User->>UI: Click 刷新状态
+        UI->>API: POST /api/v1/dashboard/refresh
+        API->>Worker: attach via CDP
+        Worker->>Codex: validate analytics access
+        Worker->>Codex: read usage and account identity
+        API->>UI: account active with masked identity
+    end
 ```
 
 关键点：
 
 - 登录由用户手动完成
 - 控制台不要求用户输入邮箱；首次只创建待识别账号
+- 控制台会优先复用已能读取 usage 的现有 worker，避免重复打开空白登录窗口
 - 系统负责拉起普通浏览器、附着 CDP、校验 usage，并从已登录会话提取账号标识
 - 成功后只写入脱敏账号标识、账号元信息与 context 路径
 - 不再要求浏览器关闭后还能单独复用该登录态
@@ -447,7 +521,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Phone as iPhone 5s
+    participant Sidecar as Sidecar Device Browser
     participant API as FastAPI Service
     participant Cache as In-Memory Cache
     participant Usage as Usage Service
@@ -458,7 +532,7 @@ sequenceDiagram
     participant Scraper as Scraper Service
     participant Codex as Codex Analytics
 
-    Phone->>API: GET /dashboard?account_id=acc_001
+    Sidecar->>API: GET /dashboard?account_id=acc_001
     API->>Cache: lookup usage:acc_001
     alt cache hit
         Cache-->>API: cached snapshot
@@ -481,7 +555,7 @@ sequenceDiagram
         Usage-->>API: normalized snapshot
         API->>Cache: save snapshot
     end
-    API-->>Phone: HTML or JSON response
+    API-->>Sidecar: HTML or JSON response
 ```
 
 ## 8.3 切换账号
@@ -493,14 +567,14 @@ sequenceDiagram
 不是：
 
 - 重新登录
-- 切换手机本地状态
+- 切换副屏设备本地状态
 - 切换浏览器 tab
 
 ## 9. 页面与 API 设计
 
 MVP 采用：
 
-- 页面路由：给 `iPhone 5s` 直接访问
+- 页面路由：给同局域网副屏设备直接访问
 - API 路由：给页面异步刷新使用
 
 ## 9.1 页面路由
@@ -510,7 +584,7 @@ MVP 采用：
 职责：
 
 - 固定重定向到 `/dashboard`
-- 不拼接 `account_id`，保证手机主屏幕入口稳定
+- 不拼接 `account_id`，保证副屏快捷入口稳定
 
 ### `GET /dashboard`
 
@@ -605,6 +679,7 @@ MVP 采用：
 
 - `GET /`：输出控制台页面
 - `GET /api/status`：返回主服务运行状态、账号摘要、固定入口、局域网入口、日志尾部
+- `GET /api/qrcode?kind=fixed|lan|local`：返回对应看板入口的 SVG 二维码，默认 `fixed`
 - `POST /api/start`：调用 `scripts/start_server.sh`
 - `POST /api/stop`：调用 `scripts/stop_server.sh`
 - `POST /api/add-account`：确保主服务运行，创建待识别账号，并拉起 Chrome 登录 worker
@@ -764,15 +839,16 @@ MVP 采用：
 
 ## 14.1 启动方式
 
-MVP 当前采用 Mac 本地控制台启动：
+MVP 当前推荐采用 `Token BI.app` 启动：
 
-1. 用户双击 `scripts/open_control_panel.command`
-2. 控制台打开 `http://127.0.0.1:8790/`
-3. 用户点击 `启动 Token BI`
-4. 主服务监听 `0.0.0.0:8787`
-5. 用户使用 `iPhone 5s` 打开固定 `.local` 地址
+1. 用户双击 `Token BI.app`
+2. App 自动启动控制台服务 `127.0.0.1:8790`
+3. App 窗口内显示控制台
+4. 用户点击 `启动 Token BI`
+5. 主服务监听 `0.0.0.0:8787`
+6. 用户使用任意同局域网副屏设备打开固定 `.local` 地址
 
-控制台本身仅监听 `127.0.0.1`，用于 Mac 本机操作；主看板服务监听局域网地址，供手机访问。
+控制台本身仅监听 `127.0.0.1`，用于 Mac 本机操作；主看板服务监听局域网地址，供副屏设备访问。
 
 ## 14.2 访问方式
 
@@ -785,14 +861,15 @@ MVP 当前采用 Mac 本地控制台启动：
 说明：
 
 - 不需要数据线
-- 不需要将网页安装到手机
+- 不需要将网页安装到副屏设备本地
 - 实际运行位置仍在 `Mac`
-- 推荐用固定 `.local` 地址添加到 iPhone 主屏幕
-- Safari 不支持网页按横竖屏分别控制浏览器栏；若希望横屏无浏览器栏，应从主屏幕图标启动 standalone 模式
+- 推荐用固定 `.local` 地址添加到 iPhone / Android 主屏幕或浏览器快捷方式
+- 浏览器是否全屏由设备系统和浏览器决定；若希望减少浏览器栏影响，应优先使用主屏幕/快捷方式启动模式
 
 ## 14.3 服务与 worker 生命周期
 
-- Token BI 主服务停止时，不主动杀掉已登录的 Chrome worker
+- `Token BI.app` 退出时，会停止控制台、停止主服务并关闭 Token BI 管理的 Chrome worker
+- 备用脚本方式停止主服务时，可只停止 `8787` 主服务
 - Token BI 主服务启动时，会扫描 `active` 账号并尝试恢复或拉起对应 worker
 - 如果 Chrome worker 仍存在且 CDP 端口可访问，服务会直接接回
 - 如果 Chrome worker 不存在，服务会根据账号的 `session_storage_path` 拉起新 worker
@@ -809,7 +886,43 @@ MVP 当前采用 Mac 本地控制台启动：
 
 百分比数字应是指标卡内最突出的信息，`left` 作为辅助尾标显示。
 
-## 15. 开发顺序建议
+## 15. 分发路线
+
+## 15.1 当前状态：项目目录型 App
+
+当前 `Token BI.app` 可以构建为 macOS App bundle，但仍依赖项目目录：
+
+- `.venv`
+- `app/`
+- `scripts/`
+- `config/`
+- `runtime/`
+
+因此，它适合：
+
+- 本机日常使用
+- 开发预览
+- 熟悉命令行和依赖安装的用户
+
+## 15.2 DMG 开发预览版
+
+可以将 App 打成 `.dmg` 并上传 GitHub Releases，但需要在发布说明中明确：
+
+- 用户仍需按 `SETUP.md` 安装 Python、Node、Rust/Cargo、Chrome 和 Python 依赖
+- App 需要配合完整项目目录运行
+- 第一次打开可能被 Gatekeeper 提示阻止，需要右键打开或在系统设置中允许
+
+## 15.3 普通用户可用版
+
+若要做到普通用户下载后开箱即用，后续需要：
+
+- 将 Python 后端打包为 App 内资源或独立二进制
+- 将配置与运行数据从项目目录迁移到 `~/Library/Application Support/Token BI/`
+- 不再依赖项目源码路径
+- 提供 `.dmg` 安装包
+- 增加 Developer ID 签名和 notarization
+
+## 16. 开发顺序建议
 
 建议按以下顺序开发：
 
@@ -821,21 +934,21 @@ MVP 当前采用 Mac 本地控制台启动：
 6. 实现单账号看板页面
 7. 接入多账号切换
 8. 实现内存缓存与错误态
-9. 优化 `iPhone 5s` 页面样式
+9. 优化 `iPhone 5s` 横屏页面样式，并逐步扩展到更多副屏设备尺寸
 
-## 16. 实现完成标准
+## 17. 实现完成标准
 
 达到以下条件可视为 MVP 技术完成：
 
 - 能在 `Mac` 上添加至少 1 个 `Codex` 账号
 - 登录成功后能启动独立 live worker 并保持会话可用
-- `iPhone 5s` 可通过同一 WiFi 访问看板
+- 同局域网副屏设备可通过同一 WiFi / 局域网访问看板
 - 页面可显示 `5 小时额度` 与 `周额度`
 - 页面支持多账号切换
 - 登录态失效时可正确提示重新登录
 - 抓取失败时可进入 `stale` 或 `error` 状态
 
-## 17. 与 README 的关系
+## 18. 与 README 的关系
 
 - `README.md`：产品与需求约束
 - `TECH_ARCHITECTURE.md`：开发实现蓝图

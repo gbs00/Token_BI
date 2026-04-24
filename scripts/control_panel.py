@@ -422,6 +422,25 @@ def _close_token_bi_chrome_workers() -> None:
     )
 
 
+def _chrome_available() -> bool:
+    candidates = [
+        Path("/Applications/Google Chrome.app"),
+        Path.home() / "Applications" / "Google Chrome.app",
+    ]
+    if any(path.exists() for path in candidates):
+        return True
+    try:
+        result = subprocess.run(
+            ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return bool(result.stdout.strip())
+    except OSError:
+        return False
+
+
 def _status_payload() -> dict:
     running, pid = _main_server_running()
     account = _preferred_account()
@@ -431,6 +450,9 @@ def _status_payload() -> dict:
         "pid": pid,
         "port": MAIN_PORT,
         "hostname": LOCAL_HOSTNAME,
+        "packaged": bool(getattr(sys, "frozen", False)),
+        "app_data_dir": str(APP_DATA_DIR),
+        "chrome_available": _chrome_available(),
         "urls": urls,
         "account": {
             "masked_email": account.get("masked_email"),
@@ -498,6 +520,29 @@ HTML = """<!DOCTYPE html>
         margin-top: 18px;
         font-size: 17px;
         letter-spacing: .02em;
+      }
+      .notice {
+        margin-top: 22px;
+        display: grid;
+        gap: 10px;
+        border: 1px solid rgba(115, 222, 243, .18);
+        border-radius: 16px;
+        padding: 16px 18px;
+        background:
+          linear-gradient(180deg, rgba(24, 35, 54, .84), rgba(14, 22, 35, .86));
+        color: var(--soft);
+        line-height: 1.5;
+      }
+      .notice strong {
+        color: var(--text);
+      }
+      .notice-warning {
+        color: var(--warn);
+        font-weight: 800;
+      }
+      .notice-ok {
+        color: var(--ok);
+        font-weight: 800;
       }
       .status {
         margin-top: 28px;
@@ -860,6 +905,11 @@ HTML = """<!DOCTYPE html>
       <section class="panel">
         <h1>Token BI 控制台</h1>
         <p class="sub">在这页直接管理本地看板服务，不需要每次再通过 Codex 启动。</p>
+        <div class="notice">
+          <p><strong>本机隐私说明：</strong>Token BI 只在这台 Mac 上保存账号元信息、浏览器登录态和运行日志；不上传 usage，不保存历史趋势，也不读取聊天内容。</p>
+          <p id="chromeNotice" class="notice-warning">正在检测 Google Chrome...</p>
+          <p id="storageNotice">数据目录：检查中</p>
+        </div>
 
         <div class="status">
           <div class="card">
@@ -960,7 +1010,7 @@ HTML = """<!DOCTYPE html>
     <footer class="bottom-bar">
       <span class="bar-item"><span class="dot" id="barDot"></span><span id="barService">本地服务：检查中</span></span>
       <span class="bar-item">端口：<span id="barPort">8787</span></span>
-      <span class="bar-item">模式：本地</span>
+      <span class="bar-item">模式：<span id="modeLabel">检查中</span></span>
     </footer>
 
     <script>
@@ -983,6 +1033,9 @@ HTML = """<!DOCTYPE html>
         const barDot = document.getElementById('barDot');
         const barService = document.getElementById('barService');
         const barPort = document.getElementById('barPort');
+        const chromeNotice = document.getElementById('chromeNotice');
+        const storageNotice = document.getElementById('storageNotice');
+        const modeLabel = document.getElementById('modeLabel');
 
         latestUrls = payload.urls || {};
         latestRunning = Boolean(payload.running);
@@ -995,6 +1048,15 @@ HTML = """<!DOCTYPE html>
         barDot.className = 'dot ' + (payload.running ? 'ok' : '');
         barService.textContent = payload.running ? '本地服务：运行中' : '本地服务：已停止';
         barPort.textContent = payload.port || '--';
+        modeLabel.textContent = payload.packaged ? 'App sidecar' : '开发模式';
+        storageNotice.textContent = `数据目录：${payload.app_data_dir || '--'}`;
+        if (payload.chrome_available) {
+          chromeNotice.className = 'notice-ok';
+          chromeNotice.textContent = '已检测到 Google Chrome。Token BI 会使用本机 Chrome 登录 Codex 并读取 usage。';
+        } else {
+          chromeNotice.className = 'notice-warning';
+          chromeNotice.textContent = '未检测到 Google Chrome。Token BI 需要使用本机 Chrome 登录 Codex 并读取 usage，请安装 Chrome 后重新启动。';
+        }
 
         if (payload.account) {
           const status = payload.account.status ? ` · ${payload.account.status}` : '';
