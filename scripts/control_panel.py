@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
+import sys
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,9 +15,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+from app.app_paths import resolve_app_data_dir, resolve_project_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = PROJECT_ROOT / "runtime"
+
+PROJECT_ROOT = resolve_project_root()
+APP_DATA_DIR = resolve_app_data_dir()
+RUNTIME_DIR = APP_DATA_DIR / "runtime"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -31,9 +37,7 @@ LOCAL_HOSTNAME = (
     ).stdout.strip()
 )
 
-START_SCRIPT = PROJECT_ROOT / "scripts" / "start_server.sh"
-STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop_server.sh"
-ACCOUNTS_FILE = PROJECT_ROOT / "config" / "accounts.json"
+ACCOUNTS_FILE = APP_DATA_DIR / "config" / "accounts.json"
 
 
 def _read_accounts() -> list[dict]:
@@ -98,6 +102,38 @@ def _pid_alive(pid: str) -> bool:
     return True
 
 
+def _backend_command(args: list[str]) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "app.cli", *args]
+
+
+def _stop_pid(pid: str) -> bool:
+    try:
+        pid_int = int(pid)
+    except ValueError:
+        return False
+    if not _pid_alive(pid):
+        return False
+
+    try:
+        os.kill(pid_int, signal.SIGTERM)
+    except OSError:
+        return False
+
+    for _ in range(20):
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.5)
+
+    try:
+        os.kill(pid_int, signal.SIGKILL)
+    except OSError:
+        return False
+    time.sleep(0.5)
+    return not _pid_alive(pid)
+
+
 def _dashboard_urls() -> dict[str, str]:
     base = {
         "local": f"http://127.0.0.1:{MAIN_PORT}/dashboard",
@@ -145,20 +181,73 @@ def _qrcode_svg(url: str) -> str:
     return raw
 
 
-def _run_script(path: Path) -> tuple[int, str]:
+def _start_main_server_process() -> tuple[bool, str]:
+    running, pid = _main_server_running()
+    if running:
+        return True, f"Token BI is already running · PID {pid or '--'}"
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TOKEN_BI_HOST"] = os.getenv("TOKEN_BI_HOST", "0.0.0.0")
+    env["TOKEN_BI_PORT"] = str(MAIN_PORT)
+    env["TOKEN_BI_APP_DATA_DIR"] = str(APP_DATA_DIR)
+    command = _backend_command(
+        [
+            "main-server",
+            "--host",
+            env["TOKEN_BI_HOST"],
+            "--port",
+            str(MAIN_PORT),
+        ]
+    )
+
+    try:
+        log_handle = (LOG_DIR / "server.log").open("ab")
+        process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log_handle.close()
+    except OSError as exc:
+        return False, str(exc)
+
+    PID_FILE.write_text(str(process.pid), encoding="utf-8")
+    if not _wait_for_main_server():
+        return False, "Token BI start command completed, but the API did not become ready in time."
+    return True, f"Token BI started · PID {process.pid}"
+
+
+def _stop_main_server_process() -> tuple[bool, str]:
+    stopped = False
+    messages = []
+    if PID_FILE.exists():
+        existing_pid = PID_FILE.read_text(encoding="utf-8").strip()
+        if existing_pid and _stop_pid(existing_pid):
+            stopped = True
+            messages.append(f"Token BI stopped (PID {existing_pid}).")
+        PID_FILE.unlink(missing_ok=True)
+
     try:
         result = subprocess.run(
-            [str(path)],
-            cwd=str(PROJECT_ROOT),
+            ["lsof", "-tiTCP:" + str(MAIN_PORT), "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             check=False,
         )
-    except OSError as exc:
-        return 1, str(exc)
+        for pid in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
+            if _stop_pid(pid):
+                stopped = True
+                messages.append(f"Token BI stopped (PID {pid}).")
+    except OSError:
+        pass
 
-    output = (result.stdout + result.stderr).strip()
-    return result.returncode, output
+    if stopped:
+        return True, " ".join(dict.fromkeys(messages))
+    return True, "Token BI is not running."
 
 
 def _main_api_url(path: str) -> str:
@@ -204,16 +293,7 @@ def _wait_for_main_server(timeout_seconds: int = 12) -> bool:
 
 
 def _ensure_main_server() -> tuple[bool, str]:
-    running, pid = _main_server_running()
-    if running:
-        return True, f"Token BI is already running · PID {pid or '--'}"
-
-    code, output = _run_script(START_SCRIPT)
-    if code != 0:
-        return False, output or "Unable to start Token BI."
-    if not _wait_for_main_server():
-        return False, "Token BI start command completed, but the API did not become ready in time."
-    return True, output or "Token BI started."
+    return _start_main_server_process()
 
 
 def _add_account_flow() -> dict:
@@ -332,6 +412,35 @@ def _clear_log() -> tuple[bool, str]:
     return True, "日志已清空。"
 
 
+def _close_token_bi_chrome_workers() -> None:
+    subprocess.run(
+        ["pkill", "-f", str(RUNTIME_DIR / "contexts")],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _chrome_available() -> bool:
+    candidates = [
+        Path("/Applications/Google Chrome.app"),
+        Path.home() / "Applications" / "Google Chrome.app",
+    ]
+    if any(path.exists() for path in candidates):
+        return True
+    try:
+        result = subprocess.run(
+            ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return bool(result.stdout.strip())
+    except OSError:
+        return False
+
+
 def _status_payload() -> dict:
     running, pid = _main_server_running()
     account = _preferred_account()
@@ -341,6 +450,9 @@ def _status_payload() -> dict:
         "pid": pid,
         "port": MAIN_PORT,
         "hostname": LOCAL_HOSTNAME,
+        "packaged": bool(getattr(sys, "frozen", False)),
+        "app_data_dir": str(APP_DATA_DIR),
+        "chrome_available": _chrome_available(),
         "urls": urls,
         "account": {
             "masked_email": account.get("masked_email"),
@@ -408,6 +520,29 @@ HTML = """<!DOCTYPE html>
         margin-top: 18px;
         font-size: 17px;
         letter-spacing: .02em;
+      }
+      .notice {
+        margin-top: 22px;
+        display: grid;
+        gap: 10px;
+        border: 1px solid rgba(115, 222, 243, .18);
+        border-radius: 16px;
+        padding: 16px 18px;
+        background:
+          linear-gradient(180deg, rgba(24, 35, 54, .84), rgba(14, 22, 35, .86));
+        color: var(--soft);
+        line-height: 1.5;
+      }
+      .notice strong {
+        color: var(--text);
+      }
+      .notice-warning {
+        color: var(--warn);
+        font-weight: 800;
+      }
+      .notice-ok {
+        color: var(--ok);
+        font-weight: 800;
       }
       .status {
         margin-top: 28px;
@@ -770,6 +905,11 @@ HTML = """<!DOCTYPE html>
       <section class="panel">
         <h1>Token BI 控制台</h1>
         <p class="sub">在这页直接管理本地看板服务，不需要每次再通过 Codex 启动。</p>
+        <div class="notice">
+          <p><strong>本机隐私说明：</strong>Token BI 只在这台 Mac 上保存账号元信息、浏览器登录态和运行日志；不上传 usage，不保存历史趋势，也不读取聊天内容。</p>
+          <p id="chromeNotice" class="notice-warning">正在检测 Google Chrome...</p>
+          <p id="storageNotice">数据目录：检查中</p>
+        </div>
 
         <div class="status">
           <div class="card">
@@ -870,7 +1010,7 @@ HTML = """<!DOCTYPE html>
     <footer class="bottom-bar">
       <span class="bar-item"><span class="dot" id="barDot"></span><span id="barService">本地服务：检查中</span></span>
       <span class="bar-item">端口：<span id="barPort">8787</span></span>
-      <span class="bar-item">模式：本地</span>
+      <span class="bar-item">模式：<span id="modeLabel">检查中</span></span>
     </footer>
 
     <script>
@@ -893,6 +1033,9 @@ HTML = """<!DOCTYPE html>
         const barDot = document.getElementById('barDot');
         const barService = document.getElementById('barService');
         const barPort = document.getElementById('barPort');
+        const chromeNotice = document.getElementById('chromeNotice');
+        const storageNotice = document.getElementById('storageNotice');
+        const modeLabel = document.getElementById('modeLabel');
 
         latestUrls = payload.urls || {};
         latestRunning = Boolean(payload.running);
@@ -905,6 +1048,15 @@ HTML = """<!DOCTYPE html>
         barDot.className = 'dot ' + (payload.running ? 'ok' : '');
         barService.textContent = payload.running ? '本地服务：运行中' : '本地服务：已停止';
         barPort.textContent = payload.port || '--';
+        modeLabel.textContent = payload.packaged ? 'App sidecar' : '开发模式';
+        storageNotice.textContent = `数据目录：${payload.app_data_dir || '--'}`;
+        if (payload.chrome_available) {
+          chromeNotice.className = 'notice-ok';
+          chromeNotice.textContent = '已检测到 Google Chrome。Token BI 会使用本机 Chrome 登录 Codex 并读取 usage。';
+        } else {
+          chromeNotice.className = 'notice-warning';
+          chromeNotice.textContent = '未检测到 Google Chrome。Token BI 需要使用本机 Chrome 登录 Codex 并读取 usage，请安装 Chrome 后重新启动。';
+        }
 
         if (payload.account) {
           const status = payload.account.status ? ` · ${payload.account.status}` : '';
@@ -1035,6 +1187,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/status":
             self._send_json(_status_payload())
             return
+        if parsed.path == "/api/app/health":
+            self._send_json({"ok": True})
+            return
         if parsed.path == "/api/qrcode":
             kind = parse_qs(parsed.query).get("kind", ["fixed"])[0]
             urls = _dashboard_urls()
@@ -1052,12 +1207,12 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/start":
-            code, output = _run_script(START_SCRIPT)
-            self._send_json({"ok": code == 0, "message": output or "Started."})
+            ok, message = _start_main_server_process()
+            self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/stop":
-            code, output = _run_script(STOP_SCRIPT)
-            self._send_json({"ok": code == 0, "message": output or "Stopped."})
+            ok, message = _stop_main_server_process()
+            self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/open-dashboard":
             urls = _dashboard_urls()
@@ -1084,6 +1239,12 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/clear-log":
             ok, message = _clear_log()
             self._send_json({"ok": ok, "message": message})
+            return
+        if parsed.path == "/api/app/shutdown":
+            ok, message = _stop_main_server_process()
+            _close_token_bi_chrome_workers()
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            self._send_json({"ok": ok, "message": message or "Token BI app services stopped."})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 

@@ -23,6 +23,27 @@
 - 额度强调：`remaining_pct` 数字已放大，并按剩余量分为 4 个颜色档位：`>75%`、`>50 且 <=75%`、`>25 且 <=50%`、`<=25%`。
 - 分发边界：当前 App 仍是项目目录型原型，可生成 `.dmg` 作为开发预览版；若要给普通用户开箱即用，还需将 Python 后端、脚本和运行数据迁入自包含 App 结构。
 
+## 2026-04-24 产品化基础补充
+
+今天已完成面向独立 Mac App 分发的第一轮底层改造：
+
+- Python 后端已打包为 `token-bi-backend` sidecar，Tauri App 不再依赖项目目录脚本启动控制台。
+- 用户数据目录切换到 `~/Library/Application Support/Token BI/`，用于保存账号元信息、浏览器登录态、缓存和日志。
+- 新增从项目目录到 App Support 的迁移模块，为后续从开发版升级到正式 App 做准备。
+- `npm run app:build` 现在会先构建 sidecar，再生成 `.app` 与 `.dmg`。
+- 新增 `scripts/release_local.sh` 与 [docs/RELEASE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/RELEASE.md)，用于本地 release 检查和未来 GitHub Releases 发布。
+- 当前 DMG 仍是 unsigned local build；给更多用户使用前需要 Developer ID 签名、notarization 和正式 updater manifest。
+
+## 2026-04-25 本地安装验收补充
+
+今天已完成 `Token BI.app` 的本地安装与副屏连接验收：
+
+- 已通过 DMG 将 `Token BI.app` 安装到 Mac 本地，并验证可从 App 入口进入控制台。
+- 已验证 App 控制台可启动 Token BI 主服务，并让副屏设备通过局域网入口访问看板。
+- 项目源码统一保留在 `/Users/gbs00/我的文件夹/Projects/Token_BI`。
+- `.config/superpowers/worktrees/Token_BI` 仅作为开发临时 worktree，合并推送后应清理，避免和真实项目目录混淆。
+- 当前版本适合作为本人本机验收版本；公开分发前仍需完成签名、公证、更新 manifest 和干净机器安装测试。
+
 ## 1. 项目目标
 
 建设一个面向 `任意同局域网副屏设备` 的轻量级 Web 看板，用于实时查看 `Codex` 订阅账号的额度情况，并具备多账号切换查看能力。

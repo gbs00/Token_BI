@@ -62,8 +62,9 @@
 - 前端形态：`SSR HTML + 少量原生 JavaScript`
 - 运行方式：`Mac` 本地进程
 - Mac App 壳层：`Tauri 2`
+- App 后端封装：`PyInstaller sidecar`
 - 本地控制台：独立 `ThreadingHTTPServer`，仅监听 `127.0.0.1`
-- 会话存储：项目目录下本地文件夹
+- 会话存储：`~/Library/Application Support/Token BI/runtime/contexts`
 - 缓存策略：进程内内存缓存
 
 选择该组合的原因：
@@ -71,14 +72,17 @@
 - `FastAPI` 足够轻，适合本地工具型服务
 - `Playwright` 在当前方案中只负责通过 `CDP` 附着到普通浏览器并抓取页面
 - `SSR` 有利于兼容旧设备浏览器，首期以 `iPhone 5s / iOS 12 Safari` 作为下限基准
-- `Tauri` 只作为 Mac 本地控制台壳层，不改变后端 API 和副屏访问方式
+- `Tauri` 作为 Mac 本地控制台壳层和 sidecar supervisor，不改变副屏访问方式
+- `PyInstaller` 将 Python 后端打包为 App 内部 sidecar，降低普通用户安装门槛
 - 无需数据库即可完成 MVP
 
 ## 4. 总体架构
 
 ```mermaid
 flowchart LR
-    T["Token BI.app (Tauri Shell)"] --> L["Mac Local Control Panel"]
+    T["Token BI.app (Tauri Shell)"] --> S["token-bi-backend Sidecar"]
+    S --> L["Mac Local Control Panel"]
+    S --> B["FastAPI Dashboard Service on Mac"]
     A["LAN Sidecar Browser Device"] --> B["FastAPI Dashboard Service on Mac"]
     C["Mac Browser (Optional)"] --> B
     L["Mac Local Control Panel"] --> B
@@ -97,6 +101,7 @@ flowchart LR
 - 副屏设备不运行抓取逻辑，只访问 `Mac` 上提供的网页
 - `FastAPI Dashboard Service` 是整个系统中心
 - `Token BI.app` 是推荐的 Mac 端入口，负责拉起控制台并在退出时释放本项目运行资源
+- `token-bi-backend` sidecar 提供控制台、主服务、迁移和健康检查 CLI
 - `Mac Local Control Panel` 只用于本机启动/停止主服务、查看状态、打开看板，不暴露到局域网
 - `Account Registry` 保存账号配置元信息
 - `Usage Connector Manager` 统一调度多个 usage 数据来源
@@ -246,8 +251,8 @@ Token_BI/
 
 - 默认监听 `127.0.0.1:8790`
 - 不对局域网开放
-- 通过 `scripts/start_server.sh` 和 `scripts/stop_server.sh` 管理主服务
-- 通过 `scripts/open_control_panel.command` 作为用户可双击入口
+- 产品化 App 内通过 `token-bi-backend main-server` 管理主服务
+- 开发目录仍保留 `scripts/open_control_panel.command` 作为备用入口
 
 ## 7.1.1.1 Token BI.app
 
@@ -255,16 +260,17 @@ Token_BI/
 
 - 作为 Mac 用户的推荐启动入口
 - 启动并嵌入本地控制台 `http://127.0.0.1:8790/`
-- 关闭 App 时停止控制台、停止 `8787` 主看板服务，并清理 Token BI 管理的 Chrome worker
+- 关闭 App 时通过 `/api/app/shutdown` 停止控制台、停止 `8787` 主看板服务，并清理 Token BI 管理的 Chrome worker
 - 提供与项目视觉一致的 App icon 和桌面控制台体验
 
 实现约束：
 
 - 使用 `Tauri 2`
+- 使用 `tauri-plugin-shell` 拉起 App 内部 `token-bi-backend` sidecar
 - App 窗口加载控制台页面，不额外暴露公网能力
 - 不改变主看板 API、账号配置 schema 或副屏访问 URL
 - App 退出是“释放本项目运行资源”的强语义；若用户希望保留后台服务，应使用备用脚本方式而不是 App 入口
-- 当前 App 仍依赖项目目录内的 Python 虚拟环境、脚本与后端代码，不是完全自包含安装包
+- 当前 App 已可生成 unsigned DMG；正式分发仍需 Developer ID 签名、notarization 和 GitHub updater manifest
 
 ## 7.1.1.2 控制台视觉与交互
 
@@ -882,39 +888,41 @@ MVP 当前推荐采用 `Token BI.app` 启动：
 
 ## 15. 分发路线
 
-## 15.1 当前状态：项目目录型 App
+## 15.1 当前状态：sidecar App 开发预览版
 
-当前 `Token BI.app` 可以构建为 macOS App bundle，但仍依赖项目目录：
+当前 `Token BI.app` 已从项目目录型原型升级为 sidecar App 基础形态：
 
-- `.venv`
-- `app/`
-- `scripts/`
-- `config/`
-- `runtime/`
+- Tauri 负责启动和关闭 App 壳层
+- Python 后端通过 PyInstaller 打包为 `token-bi-backend` sidecar
+- 用户数据默认写入 `~/Library/Application Support/Token BI/`
+- DMG 可安装到 `/Applications`
+- 退出 App 时会停止控制台、停止主服务并关闭 Token BI 管理的 Chrome worker
 
-因此，它适合：
+已完成的本机验收：
 
-- 本机日常使用
-- 开发预览
-- 熟悉命令行和依赖安装的用户
+- 已通过 DMG 安装 `Token BI.app`
+- 已验证 App 控制台可启动本地看板服务
+- 已验证副屏设备可连接局域网看板入口
+
+当前源码项目目录统一为 `/Users/gbs00/我的文件夹/Projects/Token_BI`。开发阶段使用的 `.config/superpowers/worktrees/Token_BI` 仅作为临时 worktree，合并推送后应清理。
 
 ## 15.2 DMG 开发预览版
 
-可以将 App 打成 `.dmg` 并上传 GitHub Releases，但需要在发布说明中明确：
+当前可以生成 `.dmg` 作为本机开发预览版，但发布说明中仍需明确：
 
-- 用户仍需按 `SETUP.md` 安装 Python、Node、Rust/Cargo、Chrome 和 Python 依赖
-- App 需要配合完整项目目录运行
+- 当前 DMG 为 unsigned local build
 - 第一次打开可能被 Gatekeeper 提示阻止，需要右键打开或在系统设置中允许
+- 仍建议先面向本人或可信测试设备使用，不直接作为公开分发包
+- Chrome 仍是 usage 登录和抓取链路的关键外部依赖
 
 ## 15.3 普通用户可用版
 
 若要做到普通用户下载后开箱即用，后续需要：
 
-- 将 Python 后端打包为 App 内资源或独立二进制
-- 将配置与运行数据从项目目录迁移到 `~/Library/Application Support/Token BI/`
-- 不再依赖项目源码路径
-- 提供 `.dmg` 安装包
-- 增加 Developer ID 签名和 notarization
+- 补齐 Developer ID 签名和 notarization
+- 生成并维护 GitHub Releases updater manifest
+- 在干净 Mac 上验证从 DMG 拖拽安装、首次启动、添加账号、刷新 usage、副屏扫码连接的完整链路
+- 明确异常提示，如未安装 Chrome、登录态失效、Cloudflare 真人验证、局域网不可达、防火墙阻断
 
 ## 16. 开发顺序建议
 

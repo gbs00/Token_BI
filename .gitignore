@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 runtime/
 node_modules/
+build/
 dist/
+src-tauri/binaries/token-bi-backend-*
 src-tauri/target/
 src-tauri/gen/

@@ -20,17 +20,27 @@
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：技术架构说明
 - [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
 - [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target/release/bundle/macos/Token BI.app>)：Mac App 原型入口，双击后打开内嵌控制台
-- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/Token BI.app>)：项目根目录中的便捷 App 副本
+- [docs/RELEASE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/RELEASE.md)：DMG、本地 release、签名、公证和 GitHub updater 发布说明
 - [config/accounts.json](/Users/gbs00/我的文件夹/Projects/Token_BI/config/accounts.json)：账号配置
 - [scripts/open_control_panel.command](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.command>)：Mac 本地控制台入口，双击即可启动控制页
 - [scripts/start_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/start_server.sh>)：启动 Token BI 主服务
 - [scripts/stop_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/stop_server.sh>)：停止 Token BI 主服务
 - `runtime/contexts/`：每个账号的浏览器 profile 目录
 - `runtime/logs/`：运行日志
+- `~/Library/Application Support/Token BI/`：产品化 App 默认用户数据目录
+
+源码项目目录统一为：
+
+```bash
+/Users/gbs00/我的文件夹/Projects/Token_BI
+```
+
+`.config/superpowers/worktrees/Token_BI` 只用于阶段性开发 worktree，不作为长期项目目录。完成合并、推送与验收后，应清理该临时目录，避免后续误从临时目录继续开发。
 
 要特别注意：
 
-- `config/accounts.json` 里会记录绝对路径
+- 开发目录中的 `config/accounts.json` 里会记录绝对路径
+- 产品化 App 会优先使用 `~/Library/Application Support/Token BI/config/accounts.json`
 - `runtime/contexts/` 里的浏览器数据和机器环境强相关
 - 换电脑后，不建议直接复用旧机器的 `runtime/contexts/`
 
@@ -89,8 +99,8 @@ npm run app:build
 - 但项目仍然依赖 `playwright` Python 包来连接浏览器调试端口
 - `npm run app:build` 会生成 `Token BI.app`
 - App 构建产物位于 `src-tauri/target/release/bundle/macos/Token BI.app`
-- 为了方便本机使用，可将构建产物复制到项目根目录 `Token BI.app`
-- 当前 App 不是完全自包含安装包，仍依赖项目目录下的 Python 虚拟环境、脚本、后端代码和配置文件
+- 本机日常使用建议通过 DMG 安装到 `/Applications`，不要长期依赖项目根目录中的 App 副本
+- 当前产品化基础版已将 Python 后端打包为 sidecar；开发构建仍需要本机具备 Python/Node/Rust，最终用户运行 DMG 不应再理解这些开发依赖
 
 ---
 
@@ -144,18 +154,18 @@ App 会自动：
 
 ### 3.1.1 当前 App 分发边界
 
-当前 `Token BI.app` 属于开发预览形态：
+当前 `Token BI.app` 已具备产品化基础能力：
 
-- 可以在本机或项目目录完整迁移的 Mac 上运行
-- 可以进一步打成 `.dmg` 上传 GitHub Releases 作为开发预览版
-- 但它仍依赖项目目录内的 `.venv`、`scripts`、`app`、`config` 与 `runtime`
+- 可以生成 `.app` 和 `.dmg`
+- Python 后端被打包为 `token-bi-backend` sidecar
+- 控制台和主服务由 App/sidecar 管理，不要求用户手动运行项目脚本
+- 用户数据默认保存到 `~/Library/Application Support/Token BI/`
 
 如果希望其他普通 Mac 用户下载后开箱即用，后续需要升级为自包含 App：
 
-- 将 Python 后端或后端二进制打进 `.app/Contents/Resources`
-- 将运行数据迁移到 `~/Library/Application Support/Token BI/`
-- 避免依赖项目目录绝对路径
-- 增加签名和 notarization，降低 macOS Gatekeeper 拦截概率
+- 配置 Developer ID 签名和 notarization，降低 macOS Gatekeeper 拦截概率
+- 生成正式 GitHub Releases updater manifest
+- 用真实干净机器验证从 DMG 拖拽安装到 `/Applications`
 
 ### 3.2 备用方式：打开 Mac 本地控制台
 

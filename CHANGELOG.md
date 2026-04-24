@@ -2,6 +2,50 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## v0.8.1 - 本地安装与副屏验收
+
+日期：2026-04-25
+
+验收结果：
+
+- 已通过本地 DMG 将 `Token BI.app` 安装到 Mac。
+- 已验证从安装后的 App 启动控制台，而不是依赖 Codex 或手动脚本进入控制台。
+- 已验证控制台可启动本地看板服务，并可连接副屏设备访问看板。
+- 已确认当前源码项目地址统一为 `/Users/gbs00/我的文件夹/Projects/Token_BI`。
+- 已确认 `.config/superpowers/worktrees/Token_BI` 仅是开发阶段临时 worktree，后续应在合并与推送后清理。
+
+发布状态：
+
+- 当前 GitHub 推送目标为 `git@github.com:gbs00/Token_BI.git`。
+- 当前 DMG 仍为 unsigned local build；可用于本人本机验收，不建议直接作为公开分发包。
+- 下一阶段面向更多用户分发前，仍需完成 Developer ID 签名、notarization、release manifest 和更新链路验证。
+
+## v0.8.0 - Mac App 产品化基础
+
+日期：2026-04-24
+
+定位变化：
+
+- `Token BI.app` 从项目目录型原型升级为可生成 DMG 的自包含 App 基础形态。
+- Python 后端被打包为 Tauri sidecar，不再要求用户理解 `.venv`、脚本或项目目录结构。
+- 默认用户数据目录迁移为 `~/Library/Application Support/Token BI/`。
+
+功能变化：
+
+- 新增 `token-bi-backend` sidecar CLI，支持 `control-panel`、`main-server`、`migrate`、`health`。
+- Tauri App 启动时直接拉起 sidecar 控制台，关闭时停止主服务和 Token BI 管理的 Chrome worker。
+- 新增 PyInstaller sidecar 构建脚本和本地 release 检查脚本。
+- 新增 DMG 构建目标与 GitHub Releases updater 预留配置。
+
+体验变化：
+
+- 控制台新增本机隐私说明、数据目录提示、Chrome 检测提示和运行模式提示。
+- 打包后的 sidecar 已验证可启动控制台、启动主服务、返回 dashboard，并在 shutdown 后释放端口。
+
+分发边界：
+
+- 当前 DMG 仍为本地 unsigned build；正式给更多用户使用前仍需 Developer ID 签名、notarization 和正式 GitHub Release manifest。
+
 ## v0.7.1 - 扫码自联副屏入口
 
 日期：2026-04-24

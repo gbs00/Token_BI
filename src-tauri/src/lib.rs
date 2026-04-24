@@ -1,29 +1,38 @@
+use std::io::Write;
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_shell::{process::CommandChild, ShellExt};
 use url::Url;
 
 const CONTROL_URL: &str = "http://127.0.0.1:8790/";
 
+type SharedChild = Arc<Mutex<Option<CommandChild>>>;
+
 pub fn run() {
-    let project_root = PathBuf::from(env!("TOKEN_BI_PROJECT_ROOT"));
     let cleanup_done = Arc::new(AtomicBool::new(false));
-    let setup_root = project_root.clone();
+    let sidecar_child: SharedChild = Arc::new(Mutex::new(None));
+    let setup_child = sidecar_child.clone();
     let setup_cleanup = cleanup_done.clone();
-    let run_root = project_root.clone();
+    let run_child = sidecar_child.clone();
     let run_cleanup = cleanup_done.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            start_control_panel(&setup_root)?;
+            let child = start_control_panel_sidecar(app)?;
+            {
+                let mut guard = setup_child
+                    .lock()
+                    .map_err(|_| "Unable to lock sidecar child state.".to_string())?;
+                *guard = Some(child);
+            }
             wait_for_control_panel()?;
 
             let url = Url::parse(CONTROL_URL).map_err(|error| error.to_string())?;
@@ -34,11 +43,11 @@ pub fn run() {
                 .resizable(true)
                 .build()?;
 
-            let cleanup_root = setup_root.clone();
+            let cleanup_child = setup_child.clone();
             let cleanup_flag = setup_cleanup.clone();
             window.on_window_event(move |event| {
                 if matches!(event, WindowEvent::CloseRequested { .. }) {
-                    stop_app_services_once(&cleanup_root, &cleanup_flag);
+                    stop_app_services_once(&cleanup_child, &cleanup_flag);
                 }
             });
 
@@ -55,29 +64,32 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
-                stop_app_services_once(&run_root, &run_cleanup);
+                stop_app_services_once(&run_child, &run_cleanup);
             }
         });
 }
 
-fn start_control_panel(project_root: &Path) -> Result<(), String> {
-    let script = project_root.join("scripts/start_control_panel.sh");
-    let output = Command::new(&script)
-        .current_dir(project_root)
-        .output()
-        .map_err(|error| format!("Unable to start control panel: {error}"))?;
+fn start_control_panel_sidecar(app: &tauri::App) -> Result<CommandChild, String> {
+    let command = app
+        .shell()
+        .sidecar("token-bi-backend")
+        .map_err(|error| format!("Unable to locate Token BI backend sidecar: {error}"))?;
+    let (mut rx, child) = command
+        .args([
+            "control-panel",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8790",
+            "--main-port",
+            "8787",
+        ])
+        .spawn()
+        .map_err(|error| format!("Unable to start Token BI backend sidecar: {error}"))?;
 
-    if output.status.success() {
-        return Ok(());
-    }
+    tauri::async_runtime::spawn(async move { while rx.recv().await.is_some() {} });
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Err(format!(
-        "Control panel start failed.\n{}\n{}",
-        stdout.trim(),
-        stderr.trim()
-    ))
+    Ok(child)
 }
 
 fn wait_for_control_panel() -> Result<(), String> {
@@ -91,11 +103,25 @@ fn wait_for_control_panel() -> Result<(), String> {
     Err("Control panel did not become reachable on 127.0.0.1:8790.".to_string())
 }
 
-fn stop_app_services_once(project_root: &Path, cleanup_done: &AtomicBool) {
+fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool) {
     if cleanup_done.swap(true, Ordering::SeqCst) {
         return;
     }
 
-    let script = project_root.join("scripts/stop_app_services.sh");
-    let _ = Command::new(&script).current_dir(project_root).status();
+    post_control_shutdown();
+    thread::sleep(Duration::from_millis(500));
+
+    if let Ok(mut guard) = sidecar_child.lock() {
+        if let Some(child) = guard.take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn post_control_shutdown() {
+    if let Ok(mut stream) = TcpStream::connect("127.0.0.1:8790") {
+        let request =
+            b"POST /api/app/shutdown HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(request);
+    }
 }
