@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos-dmg:
+    name: Build macOS DMG and create release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip
+          ./.venv/bin/pip install -r requirements.txt
+          npm ci
+
+      - name: Run verification
+        run: |
+          ./.venv/bin/pytest -q
+          ./.venv/bin/python -m compileall app scripts tests
+
+      - name: Build app and DMG
+        run: npm run app:build
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## {re.escape(tag)}(?:\s+-\s+.+)?\n(?P<body>.*?)(?=\n## |\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(changelog)
+          if match:
+              heading = changelog[match.start():changelog.find("\n", match.start())]
+              release_name = heading.removeprefix("## ").strip()
+              body = match.group("body").strip()
+          else:
+              release_name = tag
+              body = f"Release {tag}"
+
+          body_path = pathlib.Path("release-notes.md")
+          body_path.write_text(body + "\n", encoding="utf-8")
+          print(f"name={release_name}")
+          print(f"body_path={body_path}")
+          PY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.notes.outputs.name }}
+          body_path: ${{ steps.notes.outputs.body_path }}
+          files: src-tauri/target/release/bundle/dmg/*.dmg
+          prerelease: true
+          fail_on_unmatched_files: true
