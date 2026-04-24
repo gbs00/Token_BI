@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from http import HTTPStatus
@@ -13,9 +15,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+from app.app_paths import resolve_app_data_dir, resolve_project_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = PROJECT_ROOT / "runtime"
+
+PROJECT_ROOT = resolve_project_root()
+APP_DATA_DIR = resolve_app_data_dir()
+RUNTIME_DIR = APP_DATA_DIR / "runtime"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -32,9 +37,7 @@ LOCAL_HOSTNAME = (
     ).stdout.strip()
 )
 
-START_SCRIPT = PROJECT_ROOT / "scripts" / "start_server.sh"
-STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop_server.sh"
-ACCOUNTS_FILE = PROJECT_ROOT / "config" / "accounts.json"
+ACCOUNTS_FILE = APP_DATA_DIR / "config" / "accounts.json"
 
 
 def _read_accounts() -> list[dict]:
@@ -99,6 +102,38 @@ def _pid_alive(pid: str) -> bool:
     return True
 
 
+def _backend_command(args: list[str]) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "app.cli", *args]
+
+
+def _stop_pid(pid: str) -> bool:
+    try:
+        pid_int = int(pid)
+    except ValueError:
+        return False
+    if not _pid_alive(pid):
+        return False
+
+    try:
+        os.kill(pid_int, signal.SIGTERM)
+    except OSError:
+        return False
+
+    for _ in range(20):
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.5)
+
+    try:
+        os.kill(pid_int, signal.SIGKILL)
+    except OSError:
+        return False
+    time.sleep(0.5)
+    return not _pid_alive(pid)
+
+
 def _dashboard_urls() -> dict[str, str]:
     base = {
         "local": f"http://127.0.0.1:{MAIN_PORT}/dashboard",
@@ -146,20 +181,73 @@ def _qrcode_svg(url: str) -> str:
     return raw
 
 
-def _run_script(path: Path) -> tuple[int, str]:
+def _start_main_server_process() -> tuple[bool, str]:
+    running, pid = _main_server_running()
+    if running:
+        return True, f"Token BI is already running · PID {pid or '--'}"
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TOKEN_BI_HOST"] = os.getenv("TOKEN_BI_HOST", "0.0.0.0")
+    env["TOKEN_BI_PORT"] = str(MAIN_PORT)
+    env["TOKEN_BI_APP_DATA_DIR"] = str(APP_DATA_DIR)
+    command = _backend_command(
+        [
+            "main-server",
+            "--host",
+            env["TOKEN_BI_HOST"],
+            "--port",
+            str(MAIN_PORT),
+        ]
+    )
+
+    try:
+        log_handle = (LOG_DIR / "server.log").open("ab")
+        process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log_handle.close()
+    except OSError as exc:
+        return False, str(exc)
+
+    PID_FILE.write_text(str(process.pid), encoding="utf-8")
+    if not _wait_for_main_server():
+        return False, "Token BI start command completed, but the API did not become ready in time."
+    return True, f"Token BI started · PID {process.pid}"
+
+
+def _stop_main_server_process() -> tuple[bool, str]:
+    stopped = False
+    messages = []
+    if PID_FILE.exists():
+        existing_pid = PID_FILE.read_text(encoding="utf-8").strip()
+        if existing_pid and _stop_pid(existing_pid):
+            stopped = True
+            messages.append(f"Token BI stopped (PID {existing_pid}).")
+        PID_FILE.unlink(missing_ok=True)
+
     try:
         result = subprocess.run(
-            [str(path)],
-            cwd=str(PROJECT_ROOT),
+            ["lsof", "-tiTCP:" + str(MAIN_PORT), "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             check=False,
         )
-    except OSError as exc:
-        return 1, str(exc)
+        for pid in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
+            if _stop_pid(pid):
+                stopped = True
+                messages.append(f"Token BI stopped (PID {pid}).")
+    except OSError:
+        pass
 
-    output = (result.stdout + result.stderr).strip()
-    return result.returncode, output
+    if stopped:
+        return True, " ".join(dict.fromkeys(messages))
+    return True, "Token BI is not running."
 
 
 def _main_api_url(path: str) -> str:
@@ -205,16 +293,7 @@ def _wait_for_main_server(timeout_seconds: int = 12) -> bool:
 
 
 def _ensure_main_server() -> tuple[bool, str]:
-    running, pid = _main_server_running()
-    if running:
-        return True, f"Token BI is already running · PID {pid or '--'}"
-
-    code, output = _run_script(START_SCRIPT)
-    if code != 0:
-        return False, output or "Unable to start Token BI."
-    if not _wait_for_main_server():
-        return False, "Token BI start command completed, but the API did not become ready in time."
-    return True, output or "Token BI started."
+    return _start_main_server_process()
 
 
 def _add_account_flow() -> dict:
@@ -1066,12 +1145,12 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/start":
-            code, output = _run_script(START_SCRIPT)
-            self._send_json({"ok": code == 0, "message": output or "Started."})
+            ok, message = _start_main_server_process()
+            self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/stop":
-            code, output = _run_script(STOP_SCRIPT)
-            self._send_json({"ok": code == 0, "message": output or "Stopped."})
+            ok, message = _stop_main_server_process()
+            self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/open-dashboard":
             urls = _dashboard_urls()
@@ -1100,10 +1179,10 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/app/shutdown":
-            code, output = _run_script(STOP_SCRIPT)
+            ok, message = _stop_main_server_process()
             _close_token_bi_chrome_workers()
             threading.Thread(target=self.server.shutdown, daemon=True).start()
-            self._send_json({"ok": code == 0, "message": output or "Token BI app services stopped."})
+            self._send_json({"ok": ok, "message": message or "Token BI app services stopped."})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 

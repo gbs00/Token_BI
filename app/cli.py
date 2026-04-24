@@ -35,7 +35,9 @@ def main() -> None:
     if args.command == "main-server":
         import uvicorn
 
-        uvicorn.run("app.main:app", host=args.host, port=args.port)
+        from app.main import app as fastapi_app
+
+        uvicorn.run(fastapi_app, host=args.host, port=args.port, loop="asyncio")
         return
     if args.command == "migrate":
         from app.app_paths import resolve_app_data_dir, resolve_project_root
