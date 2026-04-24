@@ -1,0 +1,16 @@
+{
+  "name": "token-bi",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Token BI local sidecar dashboard app shell.",
+  "scripts": {
+    "app:dev": "tauri dev",
+    "app:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

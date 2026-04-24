@@ -9,7 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -54,6 +54,18 @@ def _preferred_account() -> dict | None:
     if active:
         return active[0]
     return accounts[0]
+
+
+def _local_visible_accounts() -> list[dict]:
+    accounts = [account for account in _read_accounts() if not account.get("account_id", "").startswith("acc_demo_")]
+    active_accounts = [account for account in accounts if account.get("status") == "active"]
+    return active_accounts or accounts
+
+
+def _main_visible_accounts() -> list[dict]:
+    payload = _main_api_request("GET", "/api/v1/accounts", timeout=5)
+    items = payload.get("items") or []
+    return [item for item in items if item.get("account_id")]
 
 
 def _main_server_running() -> tuple[bool, str | None]:
@@ -110,6 +122,27 @@ def _dashboard_urls() -> dict[str, str]:
 
     base["lan"] = f"http://{wifi_ip}:{MAIN_PORT}/dashboard" if wifi_ip else ""
     return base
+
+
+def _qrcode_svg(url: str) -> str:
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError as exc:
+        raise RuntimeError("Missing qrcode dependency. Run ./.venv/bin/pip install -r requirements.txt") from exc
+
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    image = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+    raw = image.to_string()
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8")
+    return raw
 
 
 def _run_script(path: Path) -> tuple[int, str]:
@@ -189,6 +222,22 @@ def _add_account_flow() -> dict:
         return {"ok": False, "message": message}
 
     try:
+        existing_accounts = _main_visible_accounts()
+    except RuntimeError:
+        existing_accounts = _local_visible_accounts()
+    if existing_accounts:
+        refreshed = _refresh_live_accounts()
+        if refreshed.get("ok"):
+            return {
+                **refreshed,
+                "message": (
+                    "已发现可用的已登录窗口，并已刷新 usage。"
+                    "无需新开登录窗口，可以直接打开看板。"
+                ),
+                "reused_existing_worker": True,
+            }
+
+    try:
         created = _main_api_request("POST", "/api/v1/accounts", payload={})
         account = created.get("account") or {}
         account_id = account.get("account_id")
@@ -215,7 +264,10 @@ def _refresh_live_accounts() -> dict:
     if not running:
         return {"ok": False, "message": "Token BI is not running. Start it first."}
 
-    accounts = [account for account in _read_accounts() if not account.get("account_id", "").startswith("acc_demo_")]
+    try:
+        accounts = _main_visible_accounts()
+    except RuntimeError:
+        accounts = _local_visible_accounts()
     if not accounts:
         return {"ok": True, "message": "暂无账号。点击“添加账号”开始登录。"}
 
@@ -243,7 +295,7 @@ def _refresh_live_accounts() -> dict:
 
     ready = [item for item in results if item.get("state") == "ready"]
     if ready:
-        labels = ", ".join(item.get("masked_email") or item["account_id"] for item in ready)
+        labels = ", ".join(dict.fromkeys(item.get("masked_email") or item["account_id"] for item in ready))
         return {"ok": True, "message": f"状态已刷新，已获取 usage：{labels}", "results": results}
     return {"ok": False, "message": "状态已刷新，但还没有可用 usage。请确认登录窗口未关闭且已完成登录。", "results": results}
 
@@ -269,6 +321,15 @@ def _tail_log(lines: int = 20) -> str:
         return "No server log yet."
     content = log_file.read_text(encoding="utf-8", errors="ignore").splitlines()
     return "\n".join(content[-lines:]) if content else "No server log yet."
+
+
+def _clear_log() -> tuple[bool, str]:
+    log_file = LOG_DIR / "server.log"
+    try:
+        log_file.write_text("", encoding="utf-8")
+    except OSError as exc:
+        return False, str(exc)
+    return True, "日志已清空。"
 
 
 def _status_payload() -> dict:
@@ -300,136 +361,407 @@ HTML = """<!DOCTYPE html>
     <title>Token BI 控制台</title>
     <style>
       :root {
-        --bg: #0d1220;
-        --panel: #161d2d;
-        --panel-alt: #212a3d;
-        --line: rgba(255,255,255,.08);
-        --text: #f4f7ff;
-        --muted: #aab5ca;
-        --accent: #66d7ef;
-        --ok: #77d97b;
-        --warn: #f7c968;
+        --bg: #0c121c;
+        --panel: #121926;
+        --panel-2: #171f2e;
+        --panel-3: #1f2939;
+        --line: rgba(201, 217, 255, .10);
+        --line-strong: rgba(123, 218, 244, .45);
+        --text: #f2f6ff;
+        --muted: #a9b3c7;
+        --soft: #cdd6e6;
+        --accent: #73def3;
+        --accent-2: #9bf3a7;
+        --ok: #7de184;
+        --warn: #f4cc69;
+        --danger: #ff867d;
+        --shadow: 0 28px 90px rgba(0, 0, 0, .36);
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: "Avenir Next", "SF Pro Display", sans-serif;
+        min-height: 100vh;
+        font-family: "Avenir Next", "SF Pro Display", "PingFang SC", sans-serif;
         color: var(--text);
         background:
-          radial-gradient(circle at top, rgba(84,118,255,.22), transparent 34%),
-          linear-gradient(180deg, #0b1021 0%, #17171e 100%);
+          radial-gradient(circle at 18% 0%, rgba(64, 118, 236, .22), transparent 28%),
+          radial-gradient(circle at 90% 10%, rgba(87, 226, 191, .10), transparent 24%),
+          linear-gradient(180deg, #0b111b 0%, #101721 100%);
       }
       .shell {
         min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 24px;
+        padding: 34px 38px 74px;
       }
       .panel {
-        width: min(100%, 820px);
-        border-radius: 24px;
-        padding: 24px;
-        background: rgba(19,22,31,.92);
-        border: 1px solid var(--line);
-        box-shadow: 0 24px 70px rgba(0,0,0,.35);
+        width: min(100%, 1120px);
+        margin: 0 auto;
       }
       h1 {
-        margin: 0 0 8px;
-        font-size: 32px;
+        margin: 0;
+        font-size: clamp(34px, 5.2vw, 56px);
+        letter-spacing: .01em;
+        line-height: 1;
       }
       p { margin: 0; }
       .sub {
         color: var(--muted);
-        font-size: 14px;
+        margin-top: 18px;
+        font-size: 17px;
+        letter-spacing: .02em;
       }
       .status {
-        margin-top: 18px;
+        margin-top: 28px;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
+        gap: 18px;
       }
       .card {
-        background: var(--panel-alt);
+        display: grid;
+        grid-template-columns: auto 1fr;
+        align-items: center;
+        gap: 22px;
+        min-height: 116px;
+        background:
+          linear-gradient(180deg, rgba(31, 40, 57, .86), rgba(20, 27, 40, .94));
         border: 1px solid var(--line);
         border-radius: 18px;
-        padding: 16px;
+        padding: 22px 24px;
         min-width: 0;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+      }
+      .status-icon {
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        color: var(--warn);
+        border: 1px solid rgba(244, 204, 105, .34);
+        background: rgba(244, 204, 105, .05);
+      }
+      .status-icon.ok {
+        color: var(--ok);
+        border-color: rgba(125, 225, 132, .34);
+        background: rgba(125, 225, 132, .06);
+      }
+      .status-icon svg {
+        width: 28px;
+        height: 28px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2.1;
       }
       .label {
         color: var(--muted);
-        font-size: 12px;
-        text-transform: uppercase;
+        font-size: 15px;
+        font-weight: 700;
         letter-spacing: .08em;
       }
       .value {
-        margin-top: 10px;
-        font-size: 22px;
-        font-weight: 700;
+        margin-top: 12px;
+        font-size: clamp(20px, 2.4vw, 27px);
+        font-weight: 800;
+        letter-spacing: .02em;
         word-break: break-word;
       }
       .ok { color: var(--ok); }
       .warn { color: var(--warn); }
+      .danger { color: var(--danger); }
       .actions {
-        margin-top: 18px;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
+        margin-top: 26px;
+        display: grid;
+        grid-template-columns: repeat(6, minmax(130px, auto));
+        gap: 14px;
+        justify-content: start;
       }
       button {
         appearance: none;
-        border: 1px solid rgba(102,215,239,.25);
-        background: rgba(102,215,239,.14);
-        color: var(--text);
-        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 50px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(42, 53, 73, .95), rgba(31, 41, 58, .96));
+        color: var(--soft);
+        border-radius: 12px;
         padding: 12px 18px;
-        font-size: 15px;
-        font-weight: 700;
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: .02em;
         cursor: pointer;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+        transition: transform .16s ease, border-color .16s ease, background .16s ease;
+      }
+      button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(115, 222, 243, .34);
       }
       button.secondary {
-        background: rgba(255,255,255,.06);
+        background: rgba(255,255,255,.05);
         border-color: var(--line);
       }
       button.add {
-        background: linear-gradient(135deg, rgba(102,215,239,.28), rgba(119,217,123,.20));
-        border-color: rgba(102,215,239,.42);
+        background: rgba(255,255,255,.07);
+      }
+      button.connect {
+        color: var(--text);
+        border-color: rgba(155, 243, 167, .34);
+        background:
+          linear-gradient(180deg, rgba(125, 225, 132, .18), rgba(37, 88, 82, .42));
+      }
+      button.primary {
+        color: var(--text);
+        border-color: var(--line-strong);
+        background:
+          linear-gradient(180deg, rgba(83, 170, 199, .34), rgba(36, 93, 119, .60));
+      }
+      button .icon {
+        width: 18px;
+        height: 18px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2.2;
       }
       .links {
-        margin-top: 18px;
+        margin-top: 26px;
         display: grid;
-        gap: 10px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(16, 23, 34, .72);
       }
       .link-row {
         display: grid;
-        gap: 4px;
+        grid-template-columns: 160px minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 16px;
+        padding: 14px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, .055);
+      }
+      .link-row:last-child {
+        border-bottom: 0;
       }
       .link-label {
         color: var(--muted);
-        font-size: 12px;
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: .04em;
       }
       .link-value {
         color: var(--text);
         word-break: break-all;
+        font-size: 18px;
+        letter-spacing: .01em;
+      }
+      .icon-button {
+        min-height: 38px;
+        min-width: 48px;
+        padding: 8px 12px;
+        border-radius: 10px;
+      }
+      .log-card {
+        margin-top: 22px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(11, 16, 24, .72);
+      }
+      .log-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, .07);
+      }
+      .log-title {
+        color: var(--soft);
+        font-weight: 800;
+        letter-spacing: .08em;
       }
       pre {
-        margin: 18px 0 0;
-        padding: 14px;
-        border-radius: 16px;
-        background: #0f1420;
-        border: 1px solid var(--line);
-        color: #dbe4f7;
-        min-height: 160px;
+        margin: 0;
+        padding: 14px 18px 18px;
+        height: 210px;
+        background: #0c121a;
+        color: #bfc9d8;
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 14px;
+        line-height: 1.52;
         overflow: auto;
         white-space: pre-wrap;
       }
       .flash {
-        margin-top: 14px;
+        margin-top: 16px;
         color: var(--muted);
         min-height: 20px;
       }
+      .bottom-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        min-height: 58px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 22px;
+        padding: 12px 34px;
+        color: var(--muted);
+        background: rgba(17, 24, 34, .92);
+        border-top: 1px solid rgba(255, 255, 255, .08);
+        backdrop-filter: blur(16px);
+      }
+      .bar-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-weight: 800;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--warn);
+        box-shadow: 0 0 18px rgba(244, 204, 105, .28);
+      }
+      .dot.ok {
+        background: var(--ok);
+        box-shadow: 0 0 18px rgba(125, 225, 132, .34);
+      }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 28px;
+        background:
+          radial-gradient(circle at 50% 15%, rgba(115, 222, 243, .16), transparent 28%),
+          rgba(3, 7, 12, .72);
+        backdrop-filter: blur(18px);
+      }
+      .modal-backdrop.hidden {
+        display: none;
+      }
+      .modal {
+        width: min(820px, 100%);
+        max-height: min(760px, calc(100vh - 56px));
+        overflow: auto;
+        border: 1px solid rgba(126, 157, 212, .22);
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, rgba(24, 34, 51, .98), rgba(13, 20, 31, .98));
+        box-shadow: var(--shadow);
+      }
+      .modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 26px 28px 10px;
+      }
+      .modal-title {
+        margin: 0;
+        font-size: clamp(26px, 3vw, 34px);
+        line-height: 1.05;
+      }
+      .modal-sub {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .close-button {
+        min-width: 44px;
+        min-height: 44px;
+        padding: 10px;
+        border-radius: 999px;
+      }
+      .pair-warning {
+        margin: 8px 28px 0;
+        color: var(--warn);
+        font-weight: 800;
+        min-height: 22px;
+      }
+      .qr-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        padding: 20px 28px 28px;
+      }
+      .qr-card {
+        min-width: 0;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, .045);
+      }
+      .qr-card.primary-qr {
+        border-color: rgba(115, 222, 243, .34);
+        background: rgba(33, 70, 98, .24);
+      }
+      .qr-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 900;
+      }
+      .pill {
+        border: 1px solid rgba(125, 225, 132, .34);
+        border-radius: 999px;
+        padding: 5px 9px;
+        color: var(--accent-2);
+        font-size: 12px;
+        letter-spacing: .06em;
+      }
+      .qr-box {
+        margin-top: 14px;
+        display: grid;
+        place-items: center;
+        aspect-ratio: 1;
+        border-radius: 18px;
+        padding: 14px;
+        background:
+          linear-gradient(180deg, #f8fbff, #eaf2ff);
+        box-shadow: inset 0 0 0 1px rgba(30, 50, 80, .12);
+      }
+      .qr-box img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      .qr-url {
+        margin-top: 12px;
+        color: var(--soft);
+        font-size: 14px;
+        line-height: 1.45;
+        word-break: break-all;
+      }
+      .qr-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .qr-hint {
+        padding: 0 28px 28px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+      }
       @media (max-width: 720px) {
+        .shell { padding: 24px 18px 84px; }
         .status { grid-template-columns: 1fr; }
-        .panel { padding: 18px; }
+        .actions { grid-template-columns: 1fr 1fr; }
+        .link-row { grid-template-columns: 1fr auto auto; }
+        .link-label { grid-column: 1 / -1; }
+        .qr-grid { grid-template-columns: 1fr; }
+        .modal-backdrop { padding: 14px; }
+        .bottom-bar { justify-content: flex-start; flex-wrap: wrap; }
       }
     </style>
   </head>
@@ -441,44 +773,110 @@ HTML = """<!DOCTYPE html>
 
         <div class="status">
           <div class="card">
-            <div class="label">服务状态</div>
-            <div class="value" id="serverState">加载中...</div>
+            <div class="status-icon" id="serverIcon">
+              <svg viewBox="0 0 24 24"><rect x="8" y="8" width="8" height="8" rx="1.5"/></svg>
+            </div>
+            <div>
+              <div class="label">服务状态</div>
+              <div class="value" id="serverState">加载中...</div>
+            </div>
           </div>
           <div class="card">
-            <div class="label">当前账号</div>
-            <div class="value" id="accountState">--</div>
+            <div class="status-icon ok">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M8 17h8"/></svg>
+            </div>
+            <div>
+              <div class="label">当前账号</div>
+              <div class="value" id="accountState">--</div>
+            </div>
           </div>
         </div>
 
         <div class="actions">
-          <button id="startBtn">启动 Token BI</button>
-          <button id="stopBtn" class="secondary">停止 Token BI</button>
-          <button id="addAccountBtn" class="add">添加账号</button>
-          <button id="openDashboardBtn">打开看板</button>
-          <button id="refreshBtn" class="secondary">刷新状态</button>
+          <button id="startBtn" class="primary"><svg class="icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></svg>启动 Token BI</button>
+          <button id="stopBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>停止 Token BI</button>
+          <button id="addAccountBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg>添加账号</button>
+          <button id="openDashboardBtn"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开看板</button>
+          <button id="pairDeviceBtn" class="connect"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><path d="M14 14h3v3h-3z"/><path d="M18 18h3v3h-3z"/><path d="M14 21v-2"/><path d="M21 14h-2"/></svg>扫码连接副屏</button>
+          <button id="refreshBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>刷新状态</button>
         </div>
 
         <div class="links">
           <div class="link-row">
             <div class="link-label">固定入口</div>
             <div class="link-value" id="fixedUrl">--</div>
+            <button class="icon-button" data-copy="fixed"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <button class="icon-button" data-open="fixed"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
           </div>
           <div class="link-row">
             <div class="link-label">局域网入口</div>
             <div class="link-value" id="lanUrl">--</div>
+            <button class="icon-button" data-copy="lan"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <button class="icon-button" data-open="lan"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
           </div>
           <div class="link-row">
             <div class="link-label">本机入口</div>
             <div class="link-value" id="localUrl">--</div>
+            <button class="icon-button" data-copy="local"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <button class="icon-button" data-open="local"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
           </div>
         </div>
 
         <div class="flash" id="flash"></div>
-        <pre id="logTail">加载日志中...</pre>
+        <section class="log-card">
+          <div class="log-head">
+            <div class="log-title">运行日志</div>
+            <button id="clearLogBtn" class="secondary icon-button"><svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>清空日志</button>
+          </div>
+          <pre id="logTail">加载日志中...</pre>
+        </section>
       </section>
     </div>
+    <div id="pairModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+      <section class="modal">
+        <div class="modal-head">
+          <div>
+            <h2 id="pairTitle" class="modal-title">扫码连接副屏</h2>
+            <p class="modal-sub">让闲置手机、平板或旧电脑连接到和 Mac 相同的 Wi-Fi 后，用系统相机或浏览器扫码打开看板。</p>
+          </div>
+          <button id="closePairModal" class="secondary close-button" aria-label="关闭扫码连接弹窗">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <div id="pairWarning" class="pair-warning"></div>
+        <div class="qr-grid">
+          <article class="qr-card primary-qr" id="fixedQrCard">
+            <div class="qr-title">固定入口 <span class="pill">推荐</span></div>
+            <div class="qr-box"><img id="fixedQr" alt="固定入口二维码" /></div>
+            <div class="qr-url" id="fixedQrUrl">--</div>
+            <div class="qr-actions">
+              <button class="icon-button" data-copy="fixed"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
+              <button class="icon-button" data-open="fixed"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开</button>
+            </div>
+          </article>
+          <article class="qr-card" id="lanQrCard">
+            <div class="qr-title">局域网入口 <span class="pill">备用</span></div>
+            <div class="qr-box"><img id="lanQr" alt="局域网入口二维码" /></div>
+            <div class="qr-url" id="lanQrUrl">--</div>
+            <div class="qr-actions">
+              <button class="icon-button" data-copy="lan"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
+              <button class="icon-button" data-open="lan"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开</button>
+            </div>
+          </article>
+        </div>
+        <p class="qr-hint">如果固定入口无法打开，通常是设备或路由器不支持 `.local` 解析，请改扫局域网入口。若仍无法访问，检查 Mac 防火墙、路由器客户端隔离，以及 Token BI 主服务是否已启动。</p>
+      </section>
+    </div>
+    <footer class="bottom-bar">
+      <span class="bar-item"><span class="dot" id="barDot"></span><span id="barService">本地服务：检查中</span></span>
+      <span class="bar-item">端口：<span id="barPort">8787</span></span>
+      <span class="bar-item">模式：本地</span>
+    </footer>
 
     <script>
+      let latestUrls = {};
+      let latestRunning = false;
+
       async function readStatus() {
         const res = await fetch('/api/status');
         return await res.json();
@@ -491,14 +889,26 @@ HTML = """<!DOCTYPE html>
         const lanUrl = document.getElementById('lanUrl');
         const localUrl = document.getElementById('localUrl');
         const logTail = document.getElementById('logTail');
+        const serverIcon = document.getElementById('serverIcon');
+        const barDot = document.getElementById('barDot');
+        const barService = document.getElementById('barService');
+        const barPort = document.getElementById('barPort');
+
+        latestUrls = payload.urls || {};
+        latestRunning = Boolean(payload.running);
 
         serverState.textContent = payload.running
           ? `运行中 · PID ${payload.pid || '--'}`
           : '已停止';
         serverState.className = 'value ' + (payload.running ? 'ok' : 'warn');
+        serverIcon.className = 'status-icon ' + (payload.running ? 'ok' : '');
+        barDot.className = 'dot ' + (payload.running ? 'ok' : '');
+        barService.textContent = payload.running ? '本地服务：运行中' : '本地服务：已停止';
+        barPort.textContent = payload.port || '--';
 
         if (payload.account) {
-          accountState.textContent = `${payload.account.masked_email} · ${payload.account.status}`;
+          const status = payload.account.status ? ` · ${payload.account.status}` : '';
+          accountState.textContent = `${payload.account.masked_email || payload.account.account_id}${status}`;
         } else {
           accountState.textContent = '暂无账号';
         }
@@ -507,6 +917,34 @@ HTML = """<!DOCTYPE html>
         lanUrl.textContent = payload.urls.lan || '不可用';
         localUrl.textContent = payload.urls.local || '不可用';
         logTail.textContent = payload.log_tail || 'No server log yet.';
+      }
+
+      function refreshQrCard(kind, imageId, urlId) {
+        const image = document.getElementById(imageId);
+        const label = document.getElementById(urlId);
+        const url = latestUrls[kind] || '';
+        label.textContent = url || '当前入口不可用';
+        if (url) {
+          image.removeAttribute('hidden');
+          image.src = `/api/qrcode?kind=${encodeURIComponent(kind)}&t=${Date.now()}`;
+        } else {
+          image.setAttribute('hidden', 'hidden');
+          image.removeAttribute('src');
+        }
+      }
+
+      function openPairModal() {
+        refreshQrCard('fixed', 'fixedQr', 'fixedQrUrl');
+        refreshQrCard('lan', 'lanQr', 'lanQrUrl');
+        const warning = document.getElementById('pairWarning');
+        warning.textContent = latestRunning
+          ? '扫码后会打开当前 Mac 提供的看板入口。请保持 Token BI 运行。'
+          : 'Token BI 主服务当前未启动。可以先扫码保存入口，但设备打开时会显示无法连接。';
+        document.getElementById('pairModal').classList.remove('hidden');
+      }
+
+      function closePairModal() {
+        document.getElementById('pairModal').classList.add('hidden');
       }
 
       async function postAction(path) {
@@ -518,6 +956,38 @@ HTML = """<!DOCTYPE html>
         await refreshStatus();
       }
 
+      async function copyUrl(kind) {
+        const value = latestUrls[kind];
+        const flash = document.getElementById('flash');
+        if (!value) {
+          flash.textContent = '当前入口不可用。';
+          return;
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(value);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = value;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          textarea.remove();
+        }
+        flash.textContent = '已复制入口：' + value;
+      }
+
+      async function openUrl(kind) {
+        const value = latestUrls[kind];
+        const flash = document.getElementById('flash');
+        if (!value) {
+          flash.textContent = '当前入口不可用。';
+          return;
+        }
+        await postAction('/api/open-url?kind=' + encodeURIComponent(kind));
+      }
+
       async function refreshStatus() {
         const payload = await readStatus();
         renderStatus(payload);
@@ -527,7 +997,26 @@ HTML = """<!DOCTYPE html>
       document.getElementById('stopBtn').addEventListener('click', () => postAction('/api/stop'));
       document.getElementById('addAccountBtn').addEventListener('click', () => postAction('/api/add-account'));
       document.getElementById('openDashboardBtn').addEventListener('click', () => postAction('/api/open-dashboard'));
+      document.getElementById('pairDeviceBtn').addEventListener('click', openPairModal);
+      document.getElementById('closePairModal').addEventListener('click', closePairModal);
       document.getElementById('refreshBtn').addEventListener('click', () => postAction('/api/refresh-status'));
+      document.getElementById('clearLogBtn').addEventListener('click', () => postAction('/api/clear-log'));
+      document.getElementById('pairModal').addEventListener('click', (event) => {
+        if (event.target.id === 'pairModal') {
+          closePairModal();
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          closePairModal();
+        }
+      });
+      document.querySelectorAll('[data-copy]').forEach((button) => {
+        button.addEventListener('click', () => copyUrl(button.dataset.copy));
+      });
+      document.querySelectorAll('[data-open]').forEach((button) => {
+        button.addEventListener('click', () => openUrl(button.dataset.open));
+      });
 
       refreshStatus();
       setInterval(refreshStatus, 5000);
@@ -545,6 +1034,18 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/status":
             self._send_json(_status_payload())
+            return
+        if parsed.path == "/api/qrcode":
+            kind = parse_qs(parsed.query).get("kind", ["fixed"])[0]
+            urls = _dashboard_urls()
+            target = urls.get(kind) or ""
+            if not target:
+                self.send_error(HTTPStatus.NOT_FOUND, "Dashboard URL unavailable")
+                return
+            try:
+                self._send_svg(_qrcode_svg(target))
+            except RuntimeError as exc:
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -564,11 +1065,25 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             code, output = _open_url(target)
             self._send_json({"ok": code == 0, "message": output, "url": target})
             return
+        if parsed.path == "/api/open-url":
+            kind = parse_qs(parsed.query).get("kind", [""])[0]
+            urls = _dashboard_urls()
+            target = urls.get(kind) or ""
+            if not target:
+                self._send_json({"ok": False, "message": "入口不可用。"})
+                return
+            code, output = _open_url(target)
+            self._send_json({"ok": code == 0, "message": output, "url": target})
+            return
         if parsed.path == "/api/add-account":
             self._send_json(_add_account_flow())
             return
         if parsed.path == "/api/refresh-status":
             self._send_json(_refresh_live_accounts())
+            return
+        if parsed.path == "/api/clear-log":
+            ok, message = _clear_log()
+            self._send_json({"ok": ok, "message": message})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -587,6 +1102,15 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _send_svg(self, body: str) -> None:
+        content = body.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
