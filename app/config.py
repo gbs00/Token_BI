@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from app.app_paths import resolve_app_data_dir, resolve_project_root
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -49,9 +51,10 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    project_root = Path(__file__).resolve().parents[1]
-    config_dir = project_root / "config"
-    runtime_dir = project_root / "runtime"
+    project_root = resolve_project_root()
+    app_data_dir = resolve_app_data_dir()
+    config_dir = app_data_dir / "config"
+    runtime_dir = app_data_dir / "runtime"
     templates_dir = project_root / "app" / "templates"
     static_dir = project_root / "app" / "static"
 
