@@ -10,6 +10,9 @@ APP_NAME = "Token BI"
 
 def resolve_project_root() -> Path:
     if getattr(sys, "frozen", False):
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        if bundle_root:
+            return Path(bundle_root).resolve()
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[1]
 

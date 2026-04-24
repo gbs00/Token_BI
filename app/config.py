@@ -41,10 +41,6 @@ class Settings:
             self.runtime_cache_dir,
             self.runtime_local_connector_dir,
             self.runtime_logs_dir,
-            self.templates_dir,
-            self.static_dir,
-            self.static_dir / "css",
-            self.static_dir / "js",
         ):
             directory.mkdir(parents=True, exist_ok=True)
 

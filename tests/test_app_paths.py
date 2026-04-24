@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from app.app_paths import resolve_app_data_dir, resolve_project_root
 
@@ -18,3 +19,10 @@ def test_resolve_project_root_still_finds_repo_root():
     root = resolve_project_root()
     assert (root / "app").exists()
     assert (root / "src-tauri").exists()
+
+
+def test_resolve_project_root_uses_pyinstaller_meipass(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert resolve_project_root() == tmp_path
