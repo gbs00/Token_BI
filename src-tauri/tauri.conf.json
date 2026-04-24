@@ -20,5 +20,11 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/gbs00/Token_BI/releases/latest/download/latest.json"],
+      "pubkey": "$TOKEN_BI_UPDATER_PUBKEY"
+    }
   }
 }
