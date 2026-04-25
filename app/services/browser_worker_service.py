@@ -205,9 +205,22 @@ class BrowserWorkerService:
                 stderr=subprocess.DEVNULL,
             )
 
+    def minimize_session(self, account_id: str) -> bool:
+        with self._lock:
+            session = self._sessions.get(account_id)
+            if session is None:
+                return False
+            if not self._debug_port_ready(session.debug_port):
+                session.state = BrowserSessionState.STOPPED
+                session.last_error = "Live browser worker is no longer reachable."
+                return False
+            return self._minimize_debug_port(session.debug_port)
+
     def shutdown(self) -> None:
         with self._lock:
-            self._sessions.clear()
+            account_ids = list(self._sessions.keys())
+        for account_id in account_ids:
+            self.close_session(account_id)
 
     def _launch_browser(self, context_dir: Path, debug_port: int, target_url: str) -> None:
         subprocess.Popen(
@@ -269,6 +282,30 @@ class BrowserWorkerService:
                 return payload, page.url
             finally:
                 browser.close()
+
+    def _minimize_debug_port(self, debug_port: int) -> bool:
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port))
+                try:
+                    context = browser.contexts[0] if browser.contexts else None
+                    if context is None:
+                        return False
+                    page = context.pages[0] if context.pages else context.new_page()
+                    cdp_session = context.new_cdp_session(page)
+                    window = cdp_session.send("Browser.getWindowForTarget")
+                    cdp_session.send(
+                        "Browser.setWindowBounds",
+                        {
+                            "windowId": window["windowId"],
+                            "bounds": {"windowState": "minimized"},
+                        },
+                    )
+                    return True
+                finally:
+                    browser.close()
+        except Exception:
+            return False
 
     def _allocate_debug_port(self) -> int:
         base_port = self._settings.browser_debug_base_port

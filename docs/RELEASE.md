@@ -23,9 +23,9 @@ Release flow:
 
 1. Ensure `CHANGELOG.md`, `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version.
 2. Push `main`.
-3. Create and push a version tag, for example `v0.8.1`.
+3. Create and push a version tag, for example `v0.9.0`.
 4. GitHub Actions builds the macOS DMG and creates a prerelease.
-5. The release name is parsed from the matching `CHANGELOG.md` heading, for example `v0.8.1 - 本地安装与副屏验收`.
+5. The release name is parsed from the matching `CHANGELOG.md` heading, for example `v0.9.0 - 可信测试版体验增强`.
 
 Current release artifacts are unsigned local/development builds. Keep releases marked as prerelease until Developer ID signing and notarization are in place.
 
@@ -66,7 +66,8 @@ Before uploading:
 - `./.venv/bin/python -m compileall app scripts tests` passes
 - `npm run app:build` passes
 - The packaged App opens the control panel
-- The packaged App can start and stop the `8787` main service
+- The packaged App can start and stop the main service, including fallback from `8787` to the next available port
+- The account button switches between `登录账号` and `退出账号`
 - The DMG can be mounted and the App can be copied to `/Applications`
 - Release notes summarize user-visible changes and known limitations
 

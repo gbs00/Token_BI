@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from app.models.browser_session import BrowserSessionState
+from app.services.browser_worker_service import ManagedBrowserSession
 from app.services.browser_worker_service import BrowserWorkerService
+from datetime import datetime, timezone
 
 
 class _StubScraperService:
@@ -44,3 +46,25 @@ def test_start_login_session_adopts_existing_browser_worker(test_settings, monke
     assert snapshot.context_dir == str(existing_context_dir)
     assert snapshot.current_url.endswith("#usage")
     assert launch_calls == []
+
+
+def test_minimize_session_only_targets_managed_worker(test_settings, monkeypatch) -> None:
+    service = BrowserWorkerService(test_settings, _StubScraperService())
+    now = datetime.now(timezone.utc)
+    service._sessions["acc_ready"] = ManagedBrowserSession(
+        account_id="acc_ready",
+        context_dir=test_settings.runtime_contexts_dir / "acc_ready",
+        debug_port=9333,
+        browser_app_name="Google Chrome",
+        state=BrowserSessionState.READY,
+        launched_at=now,
+        last_seen_at=now,
+    )
+    minimized_ports: list[int] = []
+
+    monkeypatch.setattr(service, "_debug_port_ready", lambda port: True)
+    monkeypatch.setattr(service, "_minimize_debug_port", lambda port: minimized_ports.append(port) or True)
+
+    assert service.minimize_session("acc_ready") is True
+    assert service.minimize_session("acc_missing") is False
+    assert minimized_ports == [9333]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from app.config import Settings
@@ -23,3 +24,7 @@ class SessionService:
             return False
         return any(context_dir.iterdir())
 
+    def delete_context(self, account_id: str) -> None:
+        context_dir = self.context_dir(account_id)
+        if context_dir.exists():
+            shutil.rmtree(context_dir)

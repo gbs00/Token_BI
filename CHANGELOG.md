@@ -2,6 +2,41 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## v0.9.0 - 可信测试版体验增强
+
+日期：2026-04-25
+
+定位变化：
+
+- 从“本人可用的本地安装版”推进到“可给新测试用户试用的可信测试版体验”。
+- 本轮不进入正式公开分发，不做 Developer ID 签名、公证、Universal DMG 和正式自动更新。
+
+功能变化：
+
+- 控制台账号入口收敛为单一主按钮：无账号、未登录、登录中断或 worker 丢失时显示 `登录账号`；账号可读取 usage 后显示 `退出账号`。
+- `登录账号` 会确保主服务运行，创建或复用待登录账号，并打开 Token BI 专用 Chrome 登录窗口。
+- `退出账号` 会关闭该账号 worker、删除账号记录、清理内存 usage 缓存，并删除 Token BI 专用 Chrome profile；不影响用户日常 Chrome。
+- 主服务优先使用 `8787`，若端口被占用，会自动在 `8788-8877` 内选择第一个可用端口。
+- 控制台、二维码、固定入口、局域网入口、本机入口都会使用实际运行端口。
+- 新增运行态端口文件 `token_bi_runtime.json`，供控制台、二维码、App shutdown 和排障使用。
+- `刷新状态` 或账号校验成功读取 usage 后，会尝试通过 CDP 最小化 Token BI 管理的 Chrome worker，降低对主桌面的打扰。
+- 新增首次启动 checklist：检测 Chrome、启动服务、登录账号、刷新 usage、扫码连接副屏；完成后默认折叠。
+- 新增诊断与错误文案体系，覆盖 Chrome 缺失、服务未启动、登录态失效、worker 丢失、usage 页面变化和局域网不可达等场景。
+
+接口变化：
+
+- 新增 `POST /api/v1/account-session/login`。
+- 新增 `POST /api/v1/account-session/logout`。
+- 新增 `POST /api/v1/accounts/{account_id}/minimize-worker`。
+- 新增 `GET /api/v1/diagnostics`。
+- 控制台新增 `POST /api/account-action`，由当前账号状态决定执行登录或退出。
+
+体验边界：
+
+- Chrome worker 仍采用“登录时可见，登录并成功刷新后自动最小化”的策略，不尝试完全后台隐藏。
+- 端口 fallback 只管理 Token BI 记录的主服务进程，避免误杀占用同端口的其他程序。
+- Usage 历史仍不落库，仍不保存账号密码。
+
 ## v0.8.1 - 本地安装与副屏验收
 
 日期：2026-04-25

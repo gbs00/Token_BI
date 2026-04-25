@@ -115,6 +115,8 @@ def test_validate_account_syncs_detected_masked_identity(app) -> None:
 def test_refresh_dashboard_endpoint_returns_live_payload(app) -> None:
     client = TestClient(app)
     account_id = _create_account_with_context(app)
+    minimized: list[str] = []
+    app.state.container.browser_worker_service.minimize_session = lambda account_id: minimized.append(account_id) or True
 
     response = client.post(f"/api/v1/dashboard/refresh?account_id={account_id}")
 
@@ -124,6 +126,73 @@ def test_refresh_dashboard_endpoint_returns_live_payload(app) -> None:
     assert payload["account"]["status"] == "active"
     assert payload["summary"]["source_type"] == "local_snapshot"
     assert payload["summary"]["source_detail"] == "local_snapshot_json"
+    assert minimized == [account_id]
+
+
+def test_account_session_login_creates_pending_account_and_opens_worker(app) -> None:
+    client = TestClient(app)
+    captured = {}
+
+    def fake_start_login_session(account_id: str, context_dir, target_url=None):
+        captured["account_id"] = account_id
+        captured["context_dir"] = str(context_dir)
+        captured["target_url"] = target_url
+        return BrowserSessionSnapshot(
+            account_id=account_id,
+            state=BrowserSessionState.AWAITING_LOGIN,
+            context_dir=str(context_dir),
+            current_url="https://chatgpt.com/#usage",
+        )
+
+    app.state.container.browser_worker_service.start_login_session = fake_start_login_session
+
+    response = client.post("/api/v1/account-session/login")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "login"
+    assert payload["account"]["status"] == "pending"
+    assert payload["session"]["state"] == "awaiting_login"
+    assert captured["account_id"] == payload["account"]["account_id"]
+
+
+def test_account_session_logout_closes_worker_deletes_account_and_profile(app) -> None:
+    client = TestClient(app)
+    account = client.post(
+        "/api/v1/accounts",
+        json={"masked_email": "user****@example.com"},
+    ).json()["account"]
+    account_id = account["account_id"]
+    context_dir = app.state.container.session_service.ensure_context_dir(account_id)
+    marker = context_dir / "Default" / "Cookies"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("cookie", encoding="utf-8")
+    closed: list[str] = []
+    app.state.container.browser_worker_service.close_session = lambda account_id: closed.append(account_id)
+
+    response = client.post(f"/api/v1/account-session/logout?account_id={account_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "logout"
+    assert payload["account_id"] == account_id
+    assert payload["next_button_label"] == "登录账号"
+    assert closed == [account_id]
+    assert app.state.container.account_service.get_account(account_id) is None
+    assert context_dir.exists() is False
+
+
+def test_diagnostics_returns_actionable_copy_for_common_states(app) -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/v1/diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    codes = {item["code"] for item in payload["items"]}
+    assert "service_ready" in codes
+    assert "chrome_available" in codes
+    assert all(item["title"] and item["next_step"] for item in payload["items"])
 
 
 def test_reauth_endpoint_starts_live_browser_worker(app) -> None:

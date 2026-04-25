@@ -148,11 +148,36 @@ App 会自动：
 
 - 启动控制台服务 `127.0.0.1:8790`
 - 在 App 窗口内显示控制台
-- 让用户通过按钮启动或停止 `8787` 主看板服务
+- 让用户通过按钮启动或停止主看板服务，默认优先使用 `8787`
+- 如果 `8787` 被占用，自动切换到 `8788-8877` 中第一个可用端口，并在控制台、二维码和看板入口中显示实际端口
 
 关闭 `Token BI.app` 时，系统会停止控制台、停止主看板服务，并关闭 Token BI 管理的 Chrome worker，避免后台长期占用端口和浏览器资源。
 
-### 3.1.1 当前 App 分发边界
+### 3.1.1 v0.9 可信测试版使用路径
+
+首次打开 App 后，建议按控制台顶部 checklist 操作：
+
+1. 检查 Google Chrome 是否可用。
+2. 点击 `启动 Token BI`。
+3. 点击账号主按钮 `登录账号`，在弹出的 Token BI 专用 Chrome 窗口完成 Codex 登录和真人验证。
+4. 回到控制台点击 `刷新状态`。
+5. 确认账号按钮变为 `退出账号`，当前账号显示脱敏邮箱。
+6. 点击 `扫码连接副屏`，用副屏设备扫码打开看板。
+
+账号按钮规则：
+
+- 显示 `登录账号`：当前没有可用账号、登录未完成、登录中断或 worker 丢失。
+- 显示 `退出账号`：当前账号已读取到 usage，Token BI 认为该账号处于可用状态。
+- 点击 `退出账号`：关闭该账号 worker，删除 Token BI 专用账号记录和 Chrome profile，并刷新为 `登录账号`。
+- 该删除动作只影响 Token BI 专用 profile，不影响用户日常 Chrome 登录态。
+
+刷新行为：
+
+- `刷新状态` 会重新读取 Codex analytics usage。
+- 成功读取 usage 后，Token BI 会尝试最小化自己管理的 Chrome worker，降低桌面打扰。
+- 如果刷新失败，控制台会展示“发生了什么 + 下一步怎么做”的提示；副屏看板会尽量保留旧数据并显示简短错误。
+
+### 3.1.2 当前 App 分发边界
 
 当前 `Token BI.app` 已具备产品化基础能力：
 
@@ -191,11 +216,12 @@ http://127.0.0.1:8790/
 
 - 启动 Token BI
 - 停止 Token BI
-- 添加账号
+- 登录账号 / 退出账号，统一由一个账号主按钮按状态切换
 - 打开看板
 - 扫码连接副屏
 - 刷新状态并触发一次 usage 校验
 - 查看运行状态、PID、账号、固定入口、局域网入口和日志尾部
+- 查看首次启动 checklist 和可执行异常提示
 
 控制台仅监听 `127.0.0.1`，只用于 Mac 本机操作。
 
@@ -220,32 +246,30 @@ http://127.0.0.1:8790/
 本机打开：
 
 ```text
-http://127.0.0.1:8787
+http://127.0.0.1:<实际端口>
 ```
 
-如果能看到页面，说明服务本机可用。
+如果能看到页面，说明服务本机可用。实际端口以控制台显示为准，默认是 `8787`，被占用时可能是 `8788-8877` 中的其他端口。
 
 ---
 
 ## 4. 新机器首次接入真实账号
 
-### 4.1 推荐方式：使用控制台添加账号
+### 4.1 推荐方式：使用控制台登录账号
 
 打开控制台后点击：
 
 ```text
-添加账号
+登录账号
 ```
 
 控制台会自动：
 
 - 确认 Token BI 主服务已启动
-- 先检查已有账号 worker 是否已经能读取 usage
-- 如果已有 worker 可用，直接复用该窗口并刷新 usage
-- 如果没有可用 worker，创建一个待识别账号记录
+- 创建或复用待识别账号记录
 - 拉起独立 `Chrome` 登录窗口
 
-你只需要在新开的 `Chrome` 窗口里完成 ChatGPT/Codex 登录，并保持窗口不关闭。
+你只需要在新开的 `Chrome` 窗口里完成 ChatGPT/Codex 登录，然后回到控制台点击 `刷新状态`。成功读取 usage 后，控制台账号按钮会切换为 `退出账号`。
 
 登录完成后，回到控制台点击：
 
@@ -262,24 +286,22 @@ http://127.0.0.1:8787
 
 ---
 
-### 4.2 备用方式：命令行创建账号记录
+### 4.2 备用方式：命令行启动登录流程
 
-也可以不传 `masked_email`，让系统先创建待识别账号：
+v0.9 后推荐直接调用统一登录入口，让系统自动创建或复用待识别账号：
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/v1/accounts \
-  -H 'Content-Type: application/json' \
-  -d '{}'
+curl -X POST http://127.0.0.1:<实际端口>/api/v1/account-session/login
 ```
 
-返回里会有一个新的 `account_id`，后续都用它。
+返回里会包含账号记录和 worker session。若控制台显示 fallback 到 `8788` 等端口，请把命令中的 `<实际端口>` 替换为控制台显示的端口。
 
 ---
 
-### 4.3 启动登录流程
+### 4.3 兼容旧方式：指定账号重新登录
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
+curl -X POST http://127.0.0.1:<实际端口>/api/v1/accounts/<account_id>/reauth
 ```
 
 这一步会：
@@ -309,7 +331,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 登录完成后执行：
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/validate
+curl -X POST http://127.0.0.1:<实际端口>/api/v1/dashboard/refresh?account_id=<account_id>
 ```
 
 如果成功，返回里通常会看到：
@@ -331,7 +353,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/validate
 本机打开：
 
 ```text
-http://127.0.0.1:8787/dashboard?account_id=<account_id>
+http://127.0.0.1:<实际端口>/dashboard?account_id=<account_id>
 ```
 
 ---
@@ -350,7 +372,7 @@ http://127.0.0.1:8787/dashboard?account_id=<account_id>
 所以副屏设备不能访问：
 
 ```text
-http://127.0.0.1:8787/...
+http://127.0.0.1:<实际端口>/...
 ```
 
 ---
@@ -434,7 +456,7 @@ scripts/open_control_panel.command
 
 - `启动 Token BI`
 - `停止 Token BI`
-- `添加账号`
+- `登录账号` / `退出账号`
 - `打开看板`
 - `扫码连接副屏`
 - `刷新状态`
@@ -446,6 +468,8 @@ scripts/open_control_panel.command
 - `固定入口`：`http://<MacLocalName>.local:8787/dashboard`，推荐长期使用
 - `局域网入口`：`http://<Mac局域网IP>:8787/dashboard`，用于 `.local` 解析失败时备用
 
+如果 `8787` 被占用，控制台会在二维码中自动改成实际端口，例如 `8788`。
+
 副屏设备需要和 Mac 处在同一 Wi-Fi / 同一局域网。扫码只负责打开看板地址，usage 数据仍然由 Mac 上的 Token BI 主服务读取。
 
 如果主服务没有启动，二维码仍可展示和复制，但副屏设备打开时会显示无法连接。此时先回到控制台点击 `启动 Token BI`。
@@ -455,7 +479,7 @@ scripts/open_control_panel.command
 副屏设备建议始终使用：
 
 ```text
-http://gbs00MacBook-Air-M2.local:8787/dashboard
+http://gbs00MacBook-Air-M2.local:<实际端口>/dashboard
 ```
 
 不建议再把 `192.168.x.x` 这种动态 IP 地址添加到主屏幕或浏览器快捷方式。
@@ -465,7 +489,7 @@ http://gbs00MacBook-Air-M2.local:8787/dashboard
 如果浏览器窗口不在了，需要重新拉起：
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
+curl -X POST http://127.0.0.1:<实际端口>/api/v1/account-session/login
 ```
 
 正常情况下，主服务启动时会自动尝试恢复或拉起 `active` 账号的 worker。
@@ -525,7 +549,7 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 如果没有接回，再手动调用：
 
 ```bash
-curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
+curl -X POST http://127.0.0.1:<实际端口>/api/v1/account-session/login
 ```
 
 或在控制台中重新启动 Token BI。
@@ -555,9 +579,9 @@ curl -X POST http://127.0.0.1:8787/api/v1/accounts/<account_id>/reauth
 
 处理方式：
 
-1. 调 `reauth`
+1. 点击控制台 `登录账号`
 2. 在新开的 Chrome 窗口里登录
-3. 调 `validate`
+3. 回到控制台点击 `刷新状态`
 
 ---
 
