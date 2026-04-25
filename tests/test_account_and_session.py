@@ -20,6 +20,23 @@ def test_create_account_persists_record(container) -> None:
     assert stored.status.value == "pending"
 
 
+def test_delete_account_removes_record_and_profile(container) -> None:
+    account = container.account_service.create_account(
+        CreateAccountRequest(masked_email="user****@example.com")
+    )
+    context_dir = container.session_service.ensure_context_dir(account.account_id)
+    profile_file = context_dir / "Default" / "Cookies"
+    profile_file.parent.mkdir(parents=True, exist_ok=True)
+    profile_file.write_text("cookie", encoding="utf-8")
+
+    deleted = container.account_service.delete_account(account.account_id)
+    container.session_service.delete_context(account.account_id)
+
+    assert deleted is not None
+    assert container.account_service.get_account(account.account_id) is None
+    assert context_dir.exists() is False
+
+
 def test_session_context_material_detection(test_settings) -> None:
     service = SessionService(test_settings)
     account_id = "acc_demo"

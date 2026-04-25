@@ -24,10 +24,12 @@ RUNTIME_DIR = APP_DATA_DIR / "runtime"
 LOG_DIR = RUNTIME_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-MAIN_PORT = int(os.getenv("TOKEN_BI_PORT", "8787"))
+DEFAULT_MAIN_PORT = int(os.getenv("TOKEN_BI_PORT", "8787"))
+MAX_MAIN_PORT = int(os.getenv("TOKEN_BI_PORT_MAX", "8877"))
 CONTROL_HOST = os.getenv("TOKEN_BI_CONTROL_HOST", "127.0.0.1")
 CONTROL_PORT = int(os.getenv("TOKEN_BI_CONTROL_PORT", "8790"))
 PID_FILE = RUNTIME_DIR / "token_bi.pid"
+RUNTIME_STATE_FILE = RUNTIME_DIR / "token_bi_runtime.json"
 LOCAL_HOSTNAME = (
     subprocess.run(
         ["scutil", "--get", "LocalHostName"],
@@ -72,25 +74,62 @@ def _main_visible_accounts() -> list[dict]:
     return [item for item in items if item.get("account_id")]
 
 
+def _read_runtime_state() -> dict:
+    if not RUNTIME_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_runtime_state(port: int, pid: int | str | None) -> None:
+    RUNTIME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_STATE_FILE.write_text(
+        json.dumps({"port": port, "pid": str(pid or "")}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _clear_runtime_state() -> None:
+    RUNTIME_STATE_FILE.unlink(missing_ok=True)
+
+
+def _current_main_port() -> int:
+    state = _read_runtime_state()
+    try:
+        port = int(state.get("port") or DEFAULT_MAIN_PORT)
+    except (TypeError, ValueError):
+        port = DEFAULT_MAIN_PORT
+    return port
+
+
+def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _select_main_port(start_port: int = DEFAULT_MAIN_PORT, max_port: int = MAX_MAIN_PORT) -> int:
+    for port in range(start_port, max_port + 1):
+        if _port_available(port):
+            return port
+    raise RuntimeError(f"没有可用端口：{start_port}-{max_port} 都被占用。")
+
+
 def _main_server_running() -> tuple[bool, str | None]:
     pid = None
     if PID_FILE.exists():
         pid = PID_FILE.read_text(encoding="utf-8").strip() or None
         if pid and _pid_alive(pid):
             return True, pid
+        PID_FILE.unlink(missing_ok=True)
+        _clear_runtime_state()
 
-    try:
-        result = subprocess.run(
-            ["lsof", "-tiTCP:" + str(MAIN_PORT), "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        pids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if pids:
-            return True, pids[0]
-    except OSError:
-        pass
     return False, None
 
 
@@ -135,9 +174,10 @@ def _stop_pid(pid: str) -> bool:
 
 
 def _dashboard_urls() -> dict[str, str]:
+    port = _current_main_port()
     base = {
-        "local": f"http://127.0.0.1:{MAIN_PORT}/dashboard",
-        "fixed": f"http://{LOCAL_HOSTNAME}.local:{MAIN_PORT}/dashboard" if LOCAL_HOSTNAME else "",
+        "local": f"http://127.0.0.1:{port}/dashboard",
+        "fixed": f"http://{LOCAL_HOSTNAME}.local:{port}/dashboard" if LOCAL_HOSTNAME else "",
     }
     try:
         wifi_ip = subprocess.run(
@@ -156,7 +196,7 @@ def _dashboard_urls() -> dict[str, str]:
     except OSError:
         wifi_ip = ""
 
-    base["lan"] = f"http://{wifi_ip}:{MAIN_PORT}/dashboard" if wifi_ip else ""
+    base["lan"] = f"http://{wifi_ip}:{port}/dashboard" if wifi_ip else ""
     return base
 
 
@@ -184,12 +224,17 @@ def _qrcode_svg(url: str) -> str:
 def _start_main_server_process() -> tuple[bool, str]:
     running, pid = _main_server_running()
     if running:
-        return True, f"Token BI is already running · PID {pid or '--'}"
+        return True, f"Token BI is already running · PID {pid or '--'} · Port {_current_main_port()}"
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        port = _select_main_port(DEFAULT_MAIN_PORT, MAX_MAIN_PORT)
+    except RuntimeError as exc:
+        return False, str(exc)
+
     env = os.environ.copy()
     env["TOKEN_BI_HOST"] = os.getenv("TOKEN_BI_HOST", "0.0.0.0")
-    env["TOKEN_BI_PORT"] = str(MAIN_PORT)
+    env["TOKEN_BI_PORT"] = str(port)
     env["TOKEN_BI_APP_DATA_DIR"] = str(APP_DATA_DIR)
     command = _backend_command(
         [
@@ -197,7 +242,7 @@ def _start_main_server_process() -> tuple[bool, str]:
             "--host",
             env["TOKEN_BI_HOST"],
             "--port",
-            str(MAIN_PORT),
+            str(port),
         ]
     )
 
@@ -216,9 +261,10 @@ def _start_main_server_process() -> tuple[bool, str]:
         return False, str(exc)
 
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
-    if not _wait_for_main_server():
+    _write_runtime_state(port=port, pid=process.pid)
+    if not _wait_for_main_server(port=port):
         return False, "Token BI start command completed, but the API did not become ready in time."
-    return True, f"Token BI started · PID {process.pid}"
+    return True, f"Token BI started · PID {process.pid} · Port {port}"
 
 
 def _stop_main_server_process() -> tuple[bool, str]:
@@ -231,27 +277,15 @@ def _stop_main_server_process() -> tuple[bool, str]:
             messages.append(f"Token BI stopped (PID {existing_pid}).")
         PID_FILE.unlink(missing_ok=True)
 
-    try:
-        result = subprocess.run(
-            ["lsof", "-tiTCP:" + str(MAIN_PORT), "-sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        for pid in [line.strip() for line in result.stdout.splitlines() if line.strip()]:
-            if _stop_pid(pid):
-                stopped = True
-                messages.append(f"Token BI stopped (PID {pid}).")
-    except OSError:
-        pass
-
     if stopped:
+        _clear_runtime_state()
         return True, " ".join(dict.fromkeys(messages))
+    _clear_runtime_state()
     return True, "Token BI is not running."
 
 
-def _main_api_url(path: str) -> str:
-    return f"http://127.0.0.1:{MAIN_PORT}{path}"
+def _main_api_url(path: str, port: int | None = None) -> str:
+    return f"http://127.0.0.1:{port or _current_main_port()}{path}"
 
 
 def _main_api_request(method: str, path: str, payload: dict | None = None, timeout: int = 30) -> dict:
@@ -278,7 +312,7 @@ def _main_api_request(method: str, path: str, payload: dict | None = None, timeo
         raise RuntimeError(f"Unable to reach Token BI service: {exc}") from exc
 
 
-def _wait_for_main_server(timeout_seconds: int = 12) -> bool:
+def _wait_for_main_server(timeout_seconds: int = 12, port: int | None = None) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         running, _ = _main_server_running()
@@ -296,47 +330,54 @@ def _ensure_main_server() -> tuple[bool, str]:
     return _start_main_server_process()
 
 
-def _add_account_flow() -> dict:
+def _login_account_flow() -> dict:
     ok, message = _ensure_main_server()
     if not ok:
         return {"ok": False, "message": message}
 
     try:
-        existing_accounts = _main_visible_accounts()
-    except RuntimeError:
-        existing_accounts = _local_visible_accounts()
-    if existing_accounts:
-        refreshed = _refresh_live_accounts()
-        if refreshed.get("ok"):
-            return {
-                **refreshed,
-                "message": (
-                    "已发现可用的已登录窗口，并已刷新 usage。"
-                    "无需新开登录窗口，可以直接打开看板。"
-                ),
-                "reused_existing_worker": True,
-            }
-
-    try:
-        created = _main_api_request("POST", "/api/v1/accounts", payload={})
-        account = created.get("account") or {}
-        account_id = account.get("account_id")
-        if not account_id:
-            return {"ok": False, "message": "Account record was not created correctly."}
-        reauth = _main_api_request("POST", f"/api/v1/accounts/{account_id}/reauth", payload={})
+        payload = _main_api_request("POST", "/api/v1/account-session/login", payload={})
     except RuntimeError as exc:
-        return {"ok": False, "message": str(exc)}
+        return _error_payload("login_required", details=str(exc))
 
-    session = reauth.get("session") or {}
     return {
         "ok": True,
-        "message": (
-            "已创建待登录账号并打开 Chrome。请在新窗口完成 Codex 登录，"
-            "保持窗口不关闭，然后回到控制台点击“刷新状态”。"
-        ),
-        "account": account,
-        "session": session,
+        "message": payload.get("message")
+        or "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。",
+        "account": payload.get("account"),
+        "session": payload.get("session"),
+        "action": "login",
     }
+
+
+def _logout_account_flow() -> dict:
+    ok, message = _ensure_main_server()
+    if not ok:
+        return _error_payload("service_stopped", details=message)
+
+    account = _preferred_account()
+    account_id = account.get("account_id") if account else None
+    path = "/api/v1/account-session/logout"
+    if account_id:
+        path = f"{path}?account_id={account_id}"
+    try:
+        payload = _main_api_request("POST", path, payload={})
+    except RuntimeError as exc:
+        return _error_payload("worker_lost", details=str(exc))
+
+    return {
+        "ok": True,
+        "message": payload.get("message") or "已退出账号。",
+        "account_id": payload.get("account_id"),
+        "action": "logout",
+    }
+
+
+def _account_action_flow() -> dict:
+    account = _preferred_account()
+    if _account_action_label(account) == "退出账号":
+        return _logout_account_flow()
+    return _login_account_flow()
 
 
 def _refresh_live_accounts() -> dict:
@@ -349,7 +390,7 @@ def _refresh_live_accounts() -> dict:
     except RuntimeError:
         accounts = _local_visible_accounts()
     if not accounts:
-        return {"ok": True, "message": "暂无账号。点击“添加账号”开始登录。"}
+        return {"ok": True, "message": "暂无账号。点击“登录账号”开始。"}
 
     results = []
     for account in accounts:
@@ -377,7 +418,10 @@ def _refresh_live_accounts() -> dict:
     if ready:
         labels = ", ".join(dict.fromkeys(item.get("masked_email") or item["account_id"] for item in ready))
         return {"ok": True, "message": f"状态已刷新，已获取 usage：{labels}", "results": results}
-    return {"ok": False, "message": "状态已刷新，但还没有可用 usage。请确认登录窗口未关闭且已完成登录。", "results": results}
+    payload = _error_payload("login_required")
+    payload["message"] = "状态已刷新，但还没有可用 usage。请确认登录窗口未关闭且已完成登录。"
+    payload["results"] = results
+    return payload
 
 
 def _open_url(url: str) -> tuple[int, str]:
@@ -441,19 +485,88 @@ def _chrome_available() -> bool:
         return False
 
 
+def _account_action_label(account: dict | None) -> str:
+    if account and account.get("status") == "active":
+        return "退出账号"
+    return "登录账号"
+
+
+ERROR_COPIES = {
+    "chrome_missing": (
+        "未检测到 Chrome",
+        "Token BI 需要使用 Google Chrome 打开专用登录窗口。请安装 Chrome 后重新启动 App。",
+    ),
+    "service_stopped": (
+        "服务未启动",
+        "请点击“启动 Token BI”。如果端口被占用，Token BI 会自动切换到下一个可用端口。",
+    ),
+    "login_required": (
+        "需要登录账号",
+        "请点击“登录账号”，在弹出的 Token BI 专用 Chrome 窗口完成 Codex 登录和真人验证。",
+    ),
+    "worker_lost": (
+        "登录窗口已关闭或失联",
+        "请点击“登录账号”重新拉起专用窗口，登录后再点击“刷新状态”。",
+    ),
+    "usage_page_changed": (
+        "Usage 页面结构可能变化",
+        "请点击“打开看板”跳到官方 usage 页面核对；如果官方页面正常，请更新 Token BI。",
+    ),
+    "network_unreachable": (
+        "副屏无法访问 Mac",
+        "请确认副屏设备和 Mac 在同一 Wi-Fi，关闭路由器客户端隔离，并检查 Mac 防火墙。",
+    ),
+}
+
+
+def _error_payload(code: str, details: str | None = None) -> dict:
+    title, next_step = ERROR_COPIES.get(
+        code,
+        ("出现未知问题", "请刷新状态；如果仍失败，查看运行日志中的最近错误。"),
+    )
+    message = f"{title}。{next_step}"
+    if details:
+        message = f"{message}（{details}）"
+    return {
+        "ok": False,
+        "code": code,
+        "title": title,
+        "next_step": next_step,
+        "message": message,
+    }
+
+
+def _guide_payload(running: bool, account: dict | None, urls: dict[str, str]) -> dict:
+    account_ready = bool(account and account.get("status") == "active")
+    checklist = [
+        {"label": "检测 Chrome", "done": _chrome_available()},
+        {"label": "启动本地服务", "done": running},
+        {"label": "登录 Codex 账号", "done": account_ready},
+        {"label": "刷新 usage 数据", "done": account_ready},
+        {"label": "扫码连接副屏", "done": bool(urls.get("fixed") or urls.get("lan")) and running},
+    ]
+    return {
+        "completed": all(item["done"] for item in checklist),
+        "items": checklist,
+    }
+
+
 def _status_payload() -> dict:
     running, pid = _main_server_running()
     account = _preferred_account()
     urls = _dashboard_urls()
+    account_action_label = _account_action_label(account)
     return {
         "running": running,
         "pid": pid,
-        "port": MAIN_PORT,
+        "port": _current_main_port(),
         "hostname": LOCAL_HOSTNAME,
         "packaged": bool(getattr(sys, "frozen", False)),
         "app_data_dir": str(APP_DATA_DIR),
         "chrome_available": _chrome_available(),
         "urls": urls,
+        "account_action_label": account_action_label,
+        "guide": _guide_payload(running=running, account=account, urls=urls),
         "account": {
             "masked_email": account.get("masked_email"),
             "status": account.get("status"),
@@ -543,6 +656,58 @@ HTML = """<!DOCTYPE html>
       .notice-ok {
         color: var(--ok);
         font-weight: 800;
+      }
+      .guide {
+        margin-top: 18px;
+        border: 1px solid rgba(115, 222, 243, .16);
+        border-radius: 18px;
+        background: rgba(17, 27, 43, .72);
+        overflow: hidden;
+      }
+      .guide-head {
+        width: 100%;
+        min-height: 54px;
+        justify-content: space-between;
+        border: 0;
+        border-radius: 0;
+        background: rgba(255, 255, 255, .035);
+        color: var(--text);
+      }
+      .guide-body {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        padding: 14px;
+      }
+      .guide-body.collapsed {
+        display: none;
+      }
+      .guide-step {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+        color: var(--muted);
+        font-weight: 800;
+        font-size: 13px;
+      }
+      .guide-check {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        border: 1px solid rgba(169, 179, 199, .35);
+        color: transparent;
+      }
+      .guide-step.done {
+        color: var(--soft);
+      }
+      .guide-step.done .guide-check {
+        color: #0c121c;
+        border-color: rgba(125, 225, 132, .9);
+        background: var(--ok);
       }
       .status {
         margin-top: 28px;
@@ -892,6 +1057,7 @@ HTML = """<!DOCTYPE html>
         .shell { padding: 24px 18px 84px; }
         .status { grid-template-columns: 1fr; }
         .actions { grid-template-columns: 1fr 1fr; }
+        .guide-body { grid-template-columns: 1fr; }
         .link-row { grid-template-columns: 1fr auto auto; }
         .link-label { grid-column: 1 / -1; }
         .qr-grid { grid-template-columns: 1fr; }
@@ -910,6 +1076,14 @@ HTML = """<!DOCTYPE html>
           <p id="chromeNotice" class="notice-warning">正在检测 Google Chrome...</p>
           <p id="storageNotice">数据目录：检查中</p>
         </div>
+
+        <section class="guide" id="firstRunGuide">
+          <button id="guideToggle" class="guide-head" type="button">
+            <span>首次启动引导</span>
+            <span id="guideSummary">检查中</span>
+          </button>
+          <div class="guide-body" id="guideBody"></div>
+        </section>
 
         <div class="status">
           <div class="card">
@@ -935,7 +1109,7 @@ HTML = """<!DOCTYPE html>
         <div class="actions">
           <button id="startBtn" class="primary"><svg class="icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></svg>启动 Token BI</button>
           <button id="stopBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>停止 Token BI</button>
-          <button id="addAccountBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg>添加账号</button>
+          <button id="accountActionBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg><span id="accountActionLabel">登录账号</span></button>
           <button id="openDashboardBtn"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开看板</button>
           <button id="pairDeviceBtn" class="connect"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><path d="M14 14h3v3h-3z"/><path d="M18 18h3v3h-3z"/><path d="M14 21v-2"/><path d="M21 14h-2"/></svg>扫码连接副屏</button>
           <button id="refreshBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>刷新状态</button>
@@ -1036,6 +1210,9 @@ HTML = """<!DOCTYPE html>
         const chromeNotice = document.getElementById('chromeNotice');
         const storageNotice = document.getElementById('storageNotice');
         const modeLabel = document.getElementById('modeLabel');
+        const accountActionLabel = document.getElementById('accountActionLabel');
+        const guideSummary = document.getElementById('guideSummary');
+        const guideBody = document.getElementById('guideBody');
 
         latestUrls = payload.urls || {};
         latestRunning = Boolean(payload.running);
@@ -1064,6 +1241,24 @@ HTML = """<!DOCTYPE html>
         } else {
           accountState.textContent = '暂无账号';
         }
+        accountActionLabel.textContent = payload.account_action_label || '登录账号';
+
+        const guide = payload.guide || { completed: false, items: [] };
+        guideSummary.textContent = guide.completed ? '已完成' : '按步骤完成连接';
+        guideBody.classList.toggle('collapsed', Boolean(guide.completed));
+        guideBody.innerHTML = '';
+        (guide.items || []).forEach((item) => {
+          const step = document.createElement('div');
+          step.className = 'guide-step' + (item.done ? ' done' : '');
+          const check = document.createElement('span');
+          check.className = 'guide-check';
+          check.textContent = '✓';
+          const label = document.createElement('span');
+          label.textContent = item.label;
+          step.appendChild(check);
+          step.appendChild(label);
+          guideBody.appendChild(step);
+        });
 
         fixedUrl.textContent = payload.urls.fixed || '不可用';
         lanUrl.textContent = payload.urls.lan || '不可用';
@@ -1147,12 +1342,15 @@ HTML = """<!DOCTYPE html>
 
       document.getElementById('startBtn').addEventListener('click', () => postAction('/api/start'));
       document.getElementById('stopBtn').addEventListener('click', () => postAction('/api/stop'));
-      document.getElementById('addAccountBtn').addEventListener('click', () => postAction('/api/add-account'));
+      document.getElementById('accountActionBtn').addEventListener('click', () => postAction('/api/account-action'));
       document.getElementById('openDashboardBtn').addEventListener('click', () => postAction('/api/open-dashboard'));
       document.getElementById('pairDeviceBtn').addEventListener('click', openPairModal);
       document.getElementById('closePairModal').addEventListener('click', closePairModal);
       document.getElementById('refreshBtn').addEventListener('click', () => postAction('/api/refresh-status'));
       document.getElementById('clearLogBtn').addEventListener('click', () => postAction('/api/clear-log'));
+      document.getElementById('guideToggle').addEventListener('click', () => {
+        document.getElementById('guideBody').classList.toggle('collapsed');
+      });
       document.getElementById('pairModal').addEventListener('click', (event) => {
         if (event.target.id === 'pairModal') {
           closePairModal();
@@ -1230,8 +1428,11 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             code, output = _open_url(target)
             self._send_json({"ok": code == 0, "message": output, "url": target})
             return
+        if parsed.path == "/api/account-action":
+            self._send_json(_account_action_flow())
+            return
         if parsed.path == "/api/add-account":
-            self._send_json(_add_account_flow())
+            self._send_json(_login_account_flow())
             return
         if parsed.path == "/api/refresh-status":
             self._send_json(_refresh_live_accounts())

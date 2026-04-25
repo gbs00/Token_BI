@@ -245,7 +245,9 @@ Token_BI/
 
 - 仅在 Mac 本机提供控制页面
 - 显示 Token BI 主服务运行状态、PID、账号摘要、固定入口、局域网入口和日志尾部
-- 提供启动主服务、停止主服务、添加账号、打开看板、扫码连接副屏、刷新状态按钮
+- 提供启动主服务、停止主服务、账号主动作、打开看板、扫码连接副屏、刷新状态按钮
+- 账号主动作根据状态显示 `登录账号` 或 `退出账号`
+- 提供首次启动 checklist 与可执行异常提示
 
 实现约束：
 
@@ -253,6 +255,8 @@ Token_BI/
 - 不对局域网开放
 - 产品化 App 内通过 `token-bi-backend main-server` 管理主服务
 - 开发目录仍保留 `scripts/open_control_panel.command` 作为备用入口
+- 主服务优先使用 `8787`，若被占用则在 `8788-8877` 内选择第一个可用端口
+- 当前实际端口写入运行态文件，供控制台、二维码、App shutdown 和排障使用
 
 ## 7.1.1.1 Token BI.app
 
@@ -260,7 +264,7 @@ Token_BI/
 
 - 作为 Mac 用户的推荐启动入口
 - 启动并嵌入本地控制台 `http://127.0.0.1:8790/`
-- 关闭 App 时通过 `/api/app/shutdown` 停止控制台、停止 `8787` 主看板服务，并清理 Token BI 管理的 Chrome worker
+- 关闭 App 时通过 `/api/app/shutdown` 停止控制台、停止当前记录的主看板服务端口，并清理 Token BI 管理的 Chrome worker
 - 提供与项目视觉一致的 App icon 和桌面控制台体验
 
 实现约束：
@@ -281,7 +285,8 @@ Token_BI/
 - 深色桌面 App 风格
 - 顶部大标题与说明
 - 服务状态和当前账号双状态卡
-- 主操作按钮组：启动、停止、添加账号、打开看板、扫码连接副屏、刷新状态
+- 首次启动 checklist：检测 Chrome、启动服务、登录账号、刷新 usage、扫码连接副屏
+- 主操作按钮组：启动、停止、登录账号/退出账号、打开看板、扫码连接副屏、刷新状态
 - 入口列表：固定入口、局域网入口、本机入口
 - 每个入口提供复制与打开按钮
 - 扫码连接弹窗：展示固定 `.local` 看板二维码，并提供局域网 IP 二维码作为备用
@@ -301,6 +306,7 @@ Token_BI/
 - 当局域网 IP 变化时，`.local` 地址仍应保持稳定
 - 控制台可为固定入口生成二维码，便于手机、平板、旧电脑等副屏设备快速接入
 - 当副屏设备不支持 `.local` 解析时，控制台提供局域网 IP 二维码作为备用入口
+- 如果 `8787` 被占用，固定入口会同步使用实际 fallback 端口，例如 `http://<LocalHostName>.local:8788/dashboard`
 
 ## 7.2 Account Service
 
@@ -308,6 +314,7 @@ Token_BI/
 
 - 读取账号配置
 - 新增账号
+- 删除账号
 - 更新账号状态
 - 提供账号列表给页面和 API
 
@@ -326,6 +333,7 @@ Token_BI/
 - `account_alias` 仅作为兼容字段保留
 - MVP 前端统一显示 `masked_email`
 - 若创建时未传入 alias，后端默认将其回落为 `masked_email`
+- `退出账号` 会删除账号记录，并由 `Session Service` 删除 Token BI 专用 profile
 
 ## 7.3 Session Service
 
@@ -333,6 +341,7 @@ Token_BI/
 
 - 维护账号到 context 目录的映射
 - 创建和检查本地 context 目录
+- 删除账号对应的 Token BI 专用 context 目录
 - 为 `Browser Worker Service` 提供路径层支持
 
 约束：
@@ -348,7 +357,7 @@ Token_BI/
 - 为每个账号启动一个普通浏览器窗口
 - 为该浏览器绑定独立 `CDP` 调试端口
 - 保持 worker 运行，供后续定时抓取 usage
-- 提供会话状态查询与关闭能力
+- 提供会话状态查询、关闭与最小化能力
 
 约束：
 
@@ -356,6 +365,8 @@ Token_BI/
 - Worker 关闭后，不承诺可仅靠本地文件稳定恢复登录态
 - 服务重启后允许重新登录
 - 登录浏览器不由 Playwright 直接拉起自动化上下文，避免触发登录风控
+- 登录窗口保持可见，便于用户完成真人验证；成功刷新 usage 后尝试通过 CDP 最小化该 worker，降低桌面打扰
+- 最小化只针对 Token BI 管理的 worker，不操作用户日常 Chrome 窗口
 
 ## 7.5 Scraper Service
 
@@ -475,7 +486,7 @@ MVP 状态：
 
 ## 8. 关键数据流
 
-## 8.1 添加账号
+## 8.1 登录账号 / 退出账号
 
 ```mermaid
 sequenceDiagram
@@ -486,35 +497,36 @@ sequenceDiagram
     participant Worker as Browser Worker Service
     participant Codex as Codex Login Page
 
-    User->>UI: Click 添加账号
+    User->>UI: Click 登录账号
+    UI->>API: POST /api/v1/account-session/login
+    API->>Session: ensure_context(account_id)
+    API->>Worker: start_login_session(account_id)
+    Worker->>Codex: launch normal browser with CDP port
+    User->>Codex: manual login and verification
+    User->>UI: Click 刷新状态
     UI->>API: POST /api/v1/dashboard/refresh
-    API->>Worker: try existing account workers
-    alt Existing worker is ready
-        Worker->>Codex: refresh analytics usage
-        API->>UI: reuse existing worker
-    else No reusable worker
-        UI->>API: POST /api/v1/accounts {}
-        API->>Session: create_context(account_id)
-        UI->>API: POST /api/v1/accounts/{id}/reauth
-        API->>Worker: start_login_session(account_id)
-        Worker->>Codex: launch normal browser with CDP port
-        User->>Codex: manual login
-        User->>UI: Click 刷新状态
-        UI->>API: POST /api/v1/dashboard/refresh
-        API->>Worker: attach via CDP
-        Worker->>Codex: validate analytics access
-        Worker->>Codex: read usage and account identity
-        API->>UI: account active with masked identity
-    end
+    API->>Worker: attach via CDP
+    Worker->>Codex: validate analytics access
+    Worker->>Codex: read usage and account identity
+    API->>Worker: minimize Token BI managed worker
+    API->>UI: account active with masked identity
+    User->>UI: Click 退出账号
+    UI->>API: POST /api/v1/account-session/logout
+    API->>Worker: close_session(account_id)
+    API->>Session: delete_context(account_id)
+    API->>API: delete account record and cache
+    API->>UI: account button returns 登录账号
 ```
 
 关键点：
 
 - 登录由用户手动完成
 - 控制台不要求用户输入邮箱；首次只创建待识别账号
-- 控制台会优先复用已能读取 usage 的现有 worker，避免重复打开空白登录窗口
+- 控制台只暴露一个账号主按钮，由状态决定显示 `登录账号` 或 `退出账号`
 - 系统负责拉起普通浏览器、附着 CDP、校验 usage，并从已登录会话提取账号标识
 - 成功后只写入脱敏账号标识、账号元信息与 context 路径
+- 成功读取 usage 后尝试最小化 Token BI 管理的 Chrome worker
+- 退出账号会删除 Token BI 专用账号记录和 profile，不影响用户日常 Chrome
 - 不再要求浏览器关闭后还能单独复用该登录态
 
 ## 8.2 查看看板
@@ -665,6 +677,40 @@ MVP 采用：
 - 重新拉起该账号的 live browser worker
 - 让用户在 `Mac` 上重新登录
 
+### `POST /api/v1/account-session/login`
+
+职责：
+
+- 作为控制台 `登录账号` 的主入口
+- 无账号时创建待识别账号
+- 有 pending / expired / invalid 账号时复用并重置为 pending
+- 创建或复用 Token BI 专用 context 目录
+- 拉起该账号对应的 Chrome CDP worker
+
+### `POST /api/v1/account-session/logout`
+
+职责：
+
+- 作为控制台 `退出账号` 的主入口
+- 关闭该账号 worker
+- 删除该账号 usage 内存缓存
+- 删除账号记录
+- 删除 Token BI 专用 Chrome profile
+
+### `POST /api/v1/accounts/{account_id}/minimize-worker`
+
+职责：
+
+- 通过 CDP 最小化 Token BI 管理的 worker 窗口
+- 只作用于该账号在 Token BI 内登记的 worker，不操作用户日常 Chrome
+
+### `GET /api/v1/diagnostics`
+
+职责：
+
+- 返回控制台可展示的诊断项和下一步文案
+- 覆盖 Chrome 检测、服务状态、登录态、副屏网络等常见问题
+
 ### `POST /api/v1/dashboard/refresh`
 
 职责：
@@ -672,6 +718,7 @@ MVP 采用：
 - 强制刷新当前账号 usage
 - 跳过短时缓存
 - 主要供调试和手动刷新流程使用
+- 刷新成功并返回 `ready` 后，尝试最小化该账号 worker
 
 ### 本地控制台接口
 
@@ -682,9 +729,11 @@ MVP 采用：
 - `GET /api/qrcode?kind=fixed|lan|local`：返回对应看板入口的 SVG 二维码，默认 `fixed`
 - `POST /api/start`：调用 `scripts/start_server.sh`
 - `POST /api/stop`：调用 `scripts/stop_server.sh`
-- `POST /api/add-account`：确保主服务运行，创建待识别账号，并拉起 Chrome 登录 worker
+- `POST /api/account-action`：根据当前账号状态执行 `登录账号` 或 `退出账号`
+- `POST /api/add-account`：兼容旧入口，等价于登录账号
 - `POST /api/refresh-status`：对现有账号执行一次 dashboard refresh，成功时同步脱敏账号信息和 usage 状态
 - `POST /api/open-dashboard`：在 Mac 上打开固定看板入口
+- `POST /api/app/shutdown`：停止主服务、关闭 Token BI 管理的 worker，并关闭控制台
 
 ## 10. 配置文件设计
 
@@ -767,12 +816,13 @@ MVP 采用：
 
 建议定义以下错误码：
 
-- `ACCOUNT_NOT_FOUND`
-- `SESSION_EXPIRED`
-- `SCRAPE_FAILED`
-- `ANALYTICS_PAGE_CHANGED`
-- `MAC_SERVICE_UNREACHABLE`
-- `NO_SUCCESSFUL_SNAPSHOT`
+- `chrome_missing`：未检测到 Google Chrome
+- `service_stopped`：主服务未启动或启动失败
+- `login_required`：账号未登录、真人验证未完成或登录态失效
+- `worker_lost`：Token BI 管理的 Chrome worker 被关闭或失联
+- `usage_page_changed`：Codex analytics 页面结构变化导致解析失败
+- `network_unreachable`：副屏设备无法访问 Mac
+- `port_exhausted`：`8787-8877` 没有可用端口
 
 ## 12.3 页面状态
 
@@ -786,14 +836,12 @@ MVP 采用：
 
 ## 12.4 页面提示文案
 
-建议直接复用需求文档中已确认的英文文案：
+控制台提示采用中文可执行文案，结构固定为：
 
-- `Updated just now`
-- `Showing last successful update`
-- `Data may be delayed`
-- `Session expired on Mac`
-- `Please sign in again on Mac`
-- `Cannot reach Mac dashboard service`
+- `发生了什么`
+- `下一步怎么做`
+
+副屏看板保持轻量提示，失败时尽量保留旧数据并显示 `stale` 或 `reauth_required` 状态，避免整页崩溃。
 - `Check Wi-Fi and make sure Mac is online`
 - `No usage data yet`
 - `Open Codex on Mac and complete first sync`

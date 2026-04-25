@@ -71,6 +71,23 @@ class AccountService:
                     return account
         return None
 
+    def delete_account(self, account_id: str) -> Optional[AccountRecord]:
+        with self._lock:
+            accounts = self._read_accounts()
+            deleted_account: Optional[AccountRecord] = None
+            kept_accounts: list[AccountRecord] = []
+            for account in accounts:
+                if account.account_id == account_id:
+                    deleted_account = account
+                    continue
+                kept_accounts.append(account)
+
+            if deleted_account is None:
+                return None
+
+            self._write_accounts(kept_accounts)
+            return deleted_account
+
     def create_account(self, body: CreateAccountRequest) -> AccountRecord:
         with self._lock:
             accounts = self._read_accounts()
