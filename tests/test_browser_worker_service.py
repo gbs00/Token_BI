@@ -4,6 +4,7 @@ from app.models.browser_session import BrowserSessionState
 from app.services.browser_worker_service import ManagedBrowserSession
 from app.services.browser_worker_service import BrowserWorkerService
 from datetime import datetime, timezone
+from subprocess import CompletedProcess
 
 
 class _StubScraperService:
@@ -46,6 +47,26 @@ def test_start_login_session_adopts_existing_browser_worker(test_settings, monke
     assert snapshot.context_dir == str(existing_context_dir)
     assert snapshot.current_url.endswith("#usage")
     assert launch_calls == []
+
+
+def test_find_existing_browser_worker_handles_profile_paths_with_spaces(test_settings, monkeypatch, tmp_path) -> None:
+    service = BrowserWorkerService(test_settings, _StubScraperService())
+    context_dir = tmp_path / "Application Support" / "Token BI" / "runtime" / "contexts" / "acc_existing"
+    context_dir.mkdir(parents=True)
+    command = (
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
+        "--remote-debugging-port=9333 "
+        f"--user-data-dir={context_dir} "
+        "--new-window https://chatgpt.com/#usage"
+    )
+
+    monkeypatch.setattr(
+        "app.services.browser_worker_service.subprocess.run",
+        lambda *args, **kwargs: CompletedProcess(args=args, returncode=0, stdout=command),
+    )
+    monkeypatch.setattr(service, "_debug_port_ready", lambda port: port == 9333)
+
+    assert service._find_existing_browser_worker([context_dir]) == (context_dir, 9333)
 
 
 def test_minimize_session_only_targets_managed_worker(test_settings, monkeypatch) -> None:

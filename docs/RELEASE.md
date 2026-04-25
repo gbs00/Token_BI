@@ -21,11 +21,11 @@ GitHub Releases are created by `.github/workflows/release.yml`.
 
 Release flow:
 
-1. Ensure `CHANGELOG.md`, `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` use the same version.
+1. Ensure `CHANGELOG.md`, `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` use the same version.
 2. Push `main`.
-3. Create and push a version tag, for example `v0.9.0`.
+3. Create and push a version tag, for example `v0.9.1`.
 4. GitHub Actions builds the macOS DMG and creates a prerelease.
-5. The release name is parsed from the matching `CHANGELOG.md` heading, for example `v0.9.0 - 可信测试版体验增强`.
+5. The release name is parsed from the matching `CHANGELOG.md` heading, for example `v0.9.1 - 跨设备看板与控制台体验修复`.
 
 Current release artifacts are unsigned local/development builds. Keep releases marked as prerelease until Developer ID signing and notarization are in place.
 
@@ -68,6 +68,10 @@ Before uploading:
 - The packaged App opens the control panel
 - The packaged App can start and stop the main service, including fallback from `8787` to the next available port
 - The account button switches between `登录账号` and `退出账号`
+- The service button switches between `开启服务` and `关闭服务`
+- The QR card only appears after clicking `扫码连接副屏` and can be closed
+- The dashboard `同步额度` button triggers a fresh usage refresh
+- The iPhone 5s / iOS Safari dashboard keeps large quota numbers and clear `left` spacing
 - The DMG can be mounted and the App can be copied to `/Applications`
 - Release notes summarize user-visible changes and known limitations
 

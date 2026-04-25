@@ -1,6 +1,6 @@
 [package]
 name = "token-bi"
-version = "0.9.0"
+version = "0.9.1"
 description = "Token BI desktop app shell"
 authors = ["gbs00"]
 edition = "2021"

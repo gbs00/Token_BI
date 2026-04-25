@@ -1,6 +1,6 @@
 {
   "name": "token-bi",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Token BI local sidecar dashboard app shell.",
   "scripts": {

@@ -10,64 +10,37 @@
     <meta name="theme-color" content="#0c111b" />
     <link rel="manifest" href="{{ url_for('static', path='site.webmanifest') }}" />
     <title>Token BI</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260423-reconnect-safe" />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260426-ios-safari-fallback" />
   </head>
   <body data-dashboard-account-id="{{ selected_account_id or '' }}">
     <main class="app-shell">
       <section class="phone-frame{% if accounts|length == 1 %} single-account{% endif %}">
-        <header class="agent-nav" aria-label="Agents">
-          <span class="agent-tab">Overview</span>
-          <span class="agent-tab active">Codex</span>
-          <span class="agent-tab disabled">Gemini</span>
-          <span class="agent-tab disabled">Kimi</span>
-        </header>
-
         <section class="context-strip">
           <div class="context-copy">
-            <div class="eyebrow">Mac Sidecar Dashboard</div>
-            <h1>Codex</h1>
+            <div class="account-display" data-account-pill>
+              <span class="account-icon" aria-hidden="true">⌁</span>
+              <span class="account-display-email" data-account-name>
+                {{ dashboard.account.masked_email if dashboard.account else 'No active account selected' }}
+              </span>
+            </div>
+          </div>
+          <div class="source-inline">
+            <span>数据源</span>
+            <span class="service-dot" aria-hidden="true"></span>
+            <strong>本机服务</strong>
           </div>
           <div class="context-actions">
-            <span class="refresh-countdown" data-refresh-countdown>Refresh in 03:00</span>
-            <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">Refresh</a>
+            <span class="refresh-countdown" data-refresh-countdown>下次同步 03:00</span>
+            <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">同步额度</a>
           </div>
         </section>
-
-        {% if accounts|length != 1 %}
-        <section class="account-switcher" aria-label="Accounts">
-          {% if accounts %}
-            {% for account in accounts %}
-              <a
-                class="account-pill {% if selected_account_id == account.account_id %}active{% endif %}"
-                href="/dashboard?account_id={{ account.account_id }}"
-              >
-                <span class="account-pill-email">{{ account.masked_email }}</span>
-              </a>
-            {% endfor %}
-          {% else %}
-            <div class="empty-card">
-              <p class="empty-title">No accounts yet</p>
-              <p class="empty-copy">Create an account entry on Mac, then start the live browser worker and complete the first login.</p>
-            </div>
-          {% endif %}
-        </section>
-        {% endif %}
-
-        {% if accounts|length > 1 %}
-        <section class="selected-account-bar">
-          <div class="selected-account-copy">
-            <span class="selected-account-label">Viewing account</span>
-            <strong>{{ dashboard.account.masked_email if dashboard.account else 'No active account selected' }}</strong>
-          </div>
-        </section>
-        {% endif %}
 
         <section class="dashboard-card">
           {% if dashboard.account %}
             <div class="card-head">
               <div class="card-identity">
-                <p class="card-kicker">Viewing account</p>
-                <h2 data-account-name>{{ dashboard.account.masked_email }}</h2>
+                <p class="card-kicker">Codex Usage</p>
+                <h2>额度看板</h2>
               </div>
               <div class="status-stack">
                 <span class="status-chip state-{{ dashboard.state.value }}" data-state-chip>{{ dashboard.state.value.replace('_', ' ') }}</span>
@@ -144,7 +117,7 @@
                   </div>
                   <div class="progress-track">
                     {% set width = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
-                    <div class="progress-fill" data-progress-fill style="width: {{ width }}%"></div>
+                    <div class="progress-fill {{ metric_tier }}" data-progress-fill style="width: {{ width }}%"></div>
                   </div>
                   <div class="metric-row muted">
                     <span>Remaining</span>
@@ -180,6 +153,6 @@
       </section>
     </main>
 
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260423-reconnect-safe"></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260426-ios-safari-fallback"></script>
   </body>
 </html>

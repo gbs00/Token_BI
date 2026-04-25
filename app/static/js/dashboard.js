@@ -93,10 +93,10 @@
     return String(state || "empty").replace(/_/g, " ");
   }
 
-  function dashboardApiUrl() {
+  function dashboardApiUrl(forceRefresh) {
     var params = new URLSearchParams(window.location.search);
     var accountId = document.body.getAttribute("data-dashboard-account-id") || params.get("account_id") || "";
-    var url = "/api/v1/dashboard";
+    var url = forceRefresh ? "/api/v1/dashboard/refresh" : "/api/v1/dashboard";
     if (accountId) {
       url += "?account_id=" + encodeURIComponent(accountId);
     }
@@ -153,6 +153,7 @@
 
     if (progressNode) {
       progressNode.style.width = (remaining === null || Number.isNaN(remaining) ? 0 : remaining) + "%";
+      progressNode.className = "progress-fill " + getTierClass(remaining);
     }
 
     if (resetNode) {
@@ -228,7 +229,7 @@
       return;
     }
 
-    var label = prefix || "Refresh in ";
+    var label = prefix || "下次同步 ";
 
     function renderCountdown() {
       var remainingMs = Math.max(deadlineMs - Date.now(), 0);
@@ -256,9 +257,11 @@
     }, delayMs);
   }
 
-  async function fetchDashboard() {
+  async function fetchDashboard(options) {
+    var forceRefresh = Boolean(options && options.forceRefresh);
     try {
-      var response = await fetch(dashboardApiUrl(), {
+      var response = await fetch(dashboardApiUrl(forceRefresh), {
+        method: forceRefresh ? "POST" : "GET",
         headers: { Accept: "application/json" },
         cache: "no-store"
       });
@@ -269,10 +272,10 @@
 
       var payload = await response.json();
       updateDashboard(payload);
-      scheduleRefresh(refreshIntervalMs, "Refresh in ");
+      scheduleRefresh(refreshIntervalMs, "下次同步 ");
     } catch (error) {
-      setMessageBanner("Connection interrupted. Retrying automatically...");
-      scheduleRefresh(retryIntervalMs, "Retry in ");
+      setMessageBanner("连接中断，Token BI 会自动重试。");
+      scheduleRefresh(retryIntervalMs, "重试 ");
     }
   }
 
@@ -283,7 +286,7 @@
     }
     refreshLink.addEventListener("click", function (event) {
       event.preventDefault();
-      fetchDashboard();
+      fetchDashboard({ forceRefresh: true });
     });
   }
 

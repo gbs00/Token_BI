@@ -338,15 +338,18 @@ class BrowserWorkerService:
         except subprocess.SubprocessError:
             return None
 
-        lookup = {str(path): path for path in context_dirs}
+        lookup = sorted(((str(path), path) for path in context_dirs), key=lambda item: len(item[0]), reverse=True)
         for line in result.stdout.splitlines():
             if "--remote-debugging-port=" not in line or "--user-data-dir=" not in line:
                 continue
             port_match = re.search(r"--remote-debugging-port=(\d+)", line)
-            dir_match = re.search(r"--user-data-dir=([^ ]+)", line)
-            if port_match is None or dir_match is None:
+            if port_match is None:
                 continue
-            matched_dir = lookup.get(dir_match.group(1))
+            matched_dir = None
+            for raw_path, candidate in lookup:
+                if f"--user-data-dir={raw_path}" in line:
+                    matched_dir = candidate
+                    break
             if matched_dir is None:
                 continue
             debug_port = int(port_match.group(1))

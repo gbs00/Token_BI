@@ -105,10 +105,15 @@ def _current_main_port() -> int:
 
 
 def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.2)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock.bind(("127.0.0.1", port))
+            sock.bind(("0.0.0.0", port))
         except OSError:
             return False
     return True
@@ -263,6 +268,9 @@ def _start_main_server_process() -> tuple[bool, str]:
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
     _write_runtime_state(port=port, pid=process.pid)
     if not _wait_for_main_server(port=port):
+        _stop_pid(str(process.pid))
+        PID_FILE.unlink(missing_ok=True)
+        _clear_runtime_state()
         return False, "Token BI start command completed, but the API did not become ready in time."
     return True, f"Token BI started · PID {process.pid} · Port {port}"
 
@@ -491,6 +499,16 @@ def _account_action_label(account: dict | None) -> str:
     return "登录账号"
 
 
+def _service_action_label(running: bool) -> str:
+    return "关闭服务" if running else "开启服务"
+
+
+def _service_action_flow() -> dict:
+    running, _ = _main_server_running()
+    ok, message = _stop_main_server_process() if running else _start_main_server_process()
+    return {"ok": ok, "message": message, "action": "stop" if running else "start"}
+
+
 ERROR_COPIES = {
     "chrome_missing": (
         "未检测到 Chrome",
@@ -565,6 +583,7 @@ def _status_payload() -> dict:
         "app_data_dir": str(APP_DATA_DIR),
         "chrome_available": _chrome_available(),
         "urls": urls,
+        "service_action_label": _service_action_label(running),
         "account_action_label": account_action_label,
         "guide": _guide_payload(running=running, account=account, urls=urls),
         "account": {
@@ -634,20 +653,194 @@ HTML = """<!DOCTYPE html>
         font-size: 17px;
         letter-spacing: .02em;
       }
-      .notice {
+      .topbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding-top: 6px;
+      }
+      .service-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--warn);
+        box-shadow: 0 0 18px rgba(244, 204, 105, .28);
+      }
+      .status-dot.ok {
+        background: var(--ok);
+        box-shadow: 0 0 18px rgba(125, 225, 132, .34);
+      }
+      .service-status-text.ok {
+        color: var(--ok);
+      }
+      .service-status-text.warn {
+        color: var(--muted);
+      }
+      .info-grid {
+        margin-top: 24px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .info-card,
+      .mini-card {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background:
+          linear-gradient(180deg, rgba(31, 40, 57, .68), rgba(17, 25, 38, .82));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+      }
+      .info-card {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+        min-height: 82px;
+        padding: 16px 18px;
+      }
+      .info-icon {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        color: var(--soft);
+      }
+      .info-icon svg {
+        width: 28px;
+        height: 28px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.9;
+      }
+      .info-title {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 900;
+      }
+      .info-copy {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .control-grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: 1fr 1.65fr 1fr;
+        gap: 14px;
+      }
+      .mini-card {
+        padding: 18px;
+      }
+      .section-title {
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 900;
+        letter-spacing: .04em;
+      }
+      .account-value {
+        margin-top: 18px;
+        color: var(--text);
+        font-size: 22px;
+        font-weight: 900;
+        line-height: 1.25;
+        word-break: break-word;
+      }
+      .account-hint {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .account-panel button {
+        width: 100%;
+        margin-top: 20px;
+        min-height: 42px;
+        font-size: 14px;
+      }
+      .guide {
+        margin-top: 0;
+      }
+      .guide-head {
+        min-height: auto;
+        padding: 0;
+        justify-content: space-between;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--text);
+      }
+      .guide-body {
         margin-top: 22px;
         display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 10px;
-        border: 1px solid rgba(115, 222, 243, .18);
-        border-radius: 16px;
-        padding: 16px 18px;
-        background:
-          linear-gradient(180deg, rgba(24, 35, 54, .84), rgba(14, 22, 35, .86));
-        color: var(--soft);
-        line-height: 1.5;
+        padding: 0;
       }
-      .notice strong {
-        color: var(--text);
+      .guide-body.collapsed {
+        display: none;
+      }
+      .guide-step {
+        display: grid;
+        justify-items: center;
+        gap: 9px;
+        min-width: 0;
+        color: var(--muted);
+        text-align: center;
+        font-weight: 800;
+        font-size: 12px;
+      }
+      .guide-check {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        border: 1px solid rgba(73, 132, 255, .42);
+        color: transparent;
+        background: rgba(73, 132, 255, .16);
+      }
+      .guide-step.done {
+        color: var(--soft);
+      }
+      .guide-step.done .guide-check {
+        color: #06101b;
+        border-color: rgba(125, 225, 132, .9);
+        background: var(--ok);
+      }
+      .quick-panel {
+        display: grid;
+        align-content: start;
+        gap: 10px;
+      }
+      .quick-panel button {
+        width: 100%;
+        min-height: 38px;
+        justify-content: flex-start;
+        padding: 9px 12px;
+        font-size: 13px;
+      }
+      .workspace-grid {
+        margin-top: 14px;
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+        gap: 14px;
       }
       .notice-warning {
         color: var(--warn);
@@ -656,58 +849,6 @@ HTML = """<!DOCTYPE html>
       .notice-ok {
         color: var(--ok);
         font-weight: 800;
-      }
-      .guide {
-        margin-top: 18px;
-        border: 1px solid rgba(115, 222, 243, .16);
-        border-radius: 18px;
-        background: rgba(17, 27, 43, .72);
-        overflow: hidden;
-      }
-      .guide-head {
-        width: 100%;
-        min-height: 54px;
-        justify-content: space-between;
-        border: 0;
-        border-radius: 0;
-        background: rgba(255, 255, 255, .035);
-        color: var(--text);
-      }
-      .guide-body {
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 10px;
-        padding: 14px;
-      }
-      .guide-body.collapsed {
-        display: none;
-      }
-      .guide-step {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        min-width: 0;
-        color: var(--muted);
-        font-weight: 800;
-        font-size: 13px;
-      }
-      .guide-check {
-        width: 18px;
-        height: 18px;
-        flex: 0 0 auto;
-        display: grid;
-        place-items: center;
-        border-radius: 999px;
-        border: 1px solid rgba(169, 179, 199, .35);
-        color: transparent;
-      }
-      .guide-step.done {
-        color: var(--soft);
-      }
-      .guide-step.done .guide-check {
-        color: #0c121c;
-        border-color: rgba(125, 225, 132, .9);
-        background: var(--ok);
       }
       .status {
         margin-top: 28px;
@@ -816,6 +957,15 @@ HTML = """<!DOCTYPE html>
         background:
           linear-gradient(180deg, rgba(83, 170, 199, .34), rgba(36, 93, 119, .60));
       }
+      button.service-stop {
+        color: #fff;
+        border-color: rgba(255, 134, 125, .42);
+        background:
+          linear-gradient(180deg, rgba(255, 112, 116, .96), rgba(214, 61, 70, .96));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, .18),
+          0 14px 30px rgba(255, 86, 94, .18);
+      }
       button .icon {
         width: 18px;
         height: 18px;
@@ -824,7 +974,7 @@ HTML = """<!DOCTYPE html>
         stroke-width: 2.2;
       }
       .links {
-        margin-top: 26px;
+        margin-top: 0;
         display: grid;
         overflow: hidden;
         border: 1px solid var(--line);
@@ -861,7 +1011,7 @@ HTML = """<!DOCTYPE html>
         border-radius: 10px;
       }
       .log-card {
-        margin-top: 22px;
+        margin-top: 0;
         overflow: hidden;
         border: 1px solid var(--line);
         border-radius: 16px;
@@ -1055,8 +1205,8 @@ HTML = """<!DOCTYPE html>
       }
       @media (max-width: 720px) {
         .shell { padding: 24px 18px 84px; }
-        .status { grid-template-columns: 1fr; }
-        .actions { grid-template-columns: 1fr 1fr; }
+        .topbar, .top-actions { align-items: flex-start; flex-direction: column; }
+        .info-grid, .control-grid, .workspace-grid { grid-template-columns: 1fr; }
         .guide-body { grid-template-columns: 1fr; }
         .link-row { grid-template-columns: 1fr auto auto; }
         .link-label { grid-column: 1 / -1; }
@@ -1069,81 +1219,97 @@ HTML = """<!DOCTYPE html>
   <body>
     <div class="shell">
       <section class="panel">
-        <h1>Token BI 控制台</h1>
-        <p class="sub">在这页直接管理本地看板服务，不需要每次再通过 Codex 启动。</p>
-        <div class="notice">
-          <p><strong>本机隐私说明：</strong>Token BI 只在这台 Mac 上保存账号元信息、浏览器登录态和运行日志；不上传 usage，不保存历史趋势，也不读取聊天内容。</p>
-          <p id="chromeNotice" class="notice-warning">正在检测 Google Chrome...</p>
-          <p id="storageNotice">数据目录：检查中</p>
-        </div>
+        <header class="topbar">
+          <div>
+            <h1>Token BI 控制台</h1>
+            <p class="sub">管理本地服务与副屏连接</p>
+          </div>
+          <div class="top-actions">
+            <span class="service-pill"><span class="status-dot" id="serverIcon"></span>服务状态：<span id="serverState" class="service-status-text">检查中</span></span>
+            <button id="serviceActionBtn" class="primary"><svg class="icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></svg><span id="serviceActionLabel">开启服务</span></button>
+          </div>
+        </header>
 
-        <section class="guide" id="firstRunGuide">
-          <button id="guideToggle" class="guide-head" type="button">
-            <span>首次启动引导</span>
-            <span id="guideSummary">检查中</span>
-          </button>
-          <div class="guide-body" id="guideBody"></div>
-        </section>
-
-        <div class="status">
-          <div class="card">
-            <div class="status-icon" id="serverIcon">
-              <svg viewBox="0 0 24 24"><rect x="8" y="8" width="8" height="8" rx="1.5"/></svg>
-            </div>
+        <div class="info-grid">
+          <article class="info-card">
+            <div class="info-icon"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.4 2.9 8.4 7 10 4.1-1.6 7-5.6 7-10V6l-7-3Z"/><path d="m9.5 12 1.7 1.7 3.7-4.1"/></svg></div>
             <div>
-              <div class="label">服务状态</div>
-              <div class="value" id="serverState">加载中...</div>
+              <div class="info-title">本地运行，数据仅保存在本机</div>
+              <p class="info-copy">不上传任何额度数据，不保存历史趋势。</p>
             </div>
-          </div>
-          <div class="card">
-            <div class="status-icon ok">
-              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/><path d="M8 17h8"/></svg>
-            </div>
+          </article>
+          <article class="info-card">
+            <div class="info-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 12h9"/><path d="M12 12 7.5 4.2"/><path d="M12 12l-4.5 7.8"/></svg></div>
             <div>
-              <div class="label">当前账号</div>
-              <div class="value" id="accountState">--</div>
+              <div class="info-title">Chrome 状态</div>
+              <p id="chromeNotice" class="info-copy notice-warning">正在检测 Google Chrome...</p>
+            </div>
+          </article>
+          <article class="info-card">
+            <div class="info-icon"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/><path d="M3 7v12"/></svg></div>
+            <div>
+              <div class="info-title">数据目录</div>
+              <p id="storageNotice" class="info-copy">检查中</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="control-grid">
+          <article class="mini-card account-panel">
+            <div class="section-title">当前账号</div>
+            <div class="account-value" id="accountState">--</div>
+            <p class="account-hint">当前仅支持一个 Codex 账号</p>
+            <button id="accountActionBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg><span id="accountActionLabel">登录账号</span></button>
+          </article>
+
+          <section class="guide mini-card" id="firstRunGuide">
+            <button id="guideToggle" class="guide-head" type="button">
+              <span class="section-title">首次启动引导</span>
+              <span id="guideSummary">检查中</span>
+            </button>
+            <div class="guide-body" id="guideBody"></div>
+          </section>
+
+          <article class="mini-card quick-panel">
+            <div class="section-title">快捷操作</div>
+            <button id="openDashboardBtn" class="primary"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开看板</button>
+            <button id="pairDeviceBtn" class="connect"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><path d="M14 14h3v3h-3z"/><path d="M18 18h3v3h-3z"/><path d="M14 21v-2"/><path d="M21 14h-2"/></svg>扫码连接副屏</button>
+            <button id="refreshBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>刷新状态</button>
+          </article>
+        </div>
+
+        <div class="workspace-grid">
+          <div class="links">
+            <div class="link-row">
+              <div class="link-label">固定入口</div>
+              <div class="link-value" id="fixedUrl">--</div>
+              <button class="icon-button" data-copy="fixed"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              <button class="icon-button" data-open="fixed"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
+            </div>
+            <div class="link-row">
+              <div class="link-label">局域网入口</div>
+              <div class="link-value" id="lanUrl">--</div>
+              <button class="icon-button" data-copy="lan"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              <button class="icon-button" data-open="lan"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
+            </div>
+            <div class="link-row">
+              <div class="link-label">本机入口</div>
+              <div class="link-value" id="localUrl">--</div>
+              <button class="icon-button" data-copy="local"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              <button class="icon-button" data-open="local"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
             </div>
           </div>
-        </div>
 
-        <div class="actions">
-          <button id="startBtn" class="primary"><svg class="icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></svg>启动 Token BI</button>
-          <button id="stopBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>停止 Token BI</button>
-          <button id="accountActionBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg><span id="accountActionLabel">登录账号</span></button>
-          <button id="openDashboardBtn"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开看板</button>
-          <button id="pairDeviceBtn" class="connect"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><path d="M14 14h3v3h-3z"/><path d="M18 18h3v3h-3z"/><path d="M14 21v-2"/><path d="M21 14h-2"/></svg>扫码连接副屏</button>
-          <button id="refreshBtn" class="secondary"><svg class="icon" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>刷新状态</button>
-        </div>
-
-        <div class="links">
-          <div class="link-row">
-            <div class="link-label">固定入口</div>
-            <div class="link-value" id="fixedUrl">--</div>
-            <button class="icon-button" data-copy="fixed"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button class="icon-button" data-open="fixed"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
-          </div>
-          <div class="link-row">
-            <div class="link-label">局域网入口</div>
-            <div class="link-value" id="lanUrl">--</div>
-            <button class="icon-button" data-copy="lan"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button class="icon-button" data-open="lan"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
-          </div>
-          <div class="link-row">
-            <div class="link-label">本机入口</div>
-            <div class="link-value" id="localUrl">--</div>
-            <button class="icon-button" data-copy="local"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button class="icon-button" data-open="local"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg></button>
-          </div>
+          <section class="log-card">
+            <div class="log-head">
+              <div class="log-title">运行日志</div>
+              <button id="clearLogBtn" class="secondary icon-button"><svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>清空日志</button>
+            </div>
+            <pre id="logTail">加载日志中...</pre>
+          </section>
         </div>
 
         <div class="flash" id="flash"></div>
-        <section class="log-card">
-          <div class="log-head">
-            <div class="log-title">运行日志</div>
-            <button id="clearLogBtn" class="secondary icon-button"><svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>清空日志</button>
-          </div>
-          <pre id="logTail">加载日志中...</pre>
-        </section>
       </section>
     </div>
     <div id="pairModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
@@ -1210,6 +1376,8 @@ HTML = """<!DOCTYPE html>
         const chromeNotice = document.getElementById('chromeNotice');
         const storageNotice = document.getElementById('storageNotice');
         const modeLabel = document.getElementById('modeLabel');
+        const serviceActionBtn = document.getElementById('serviceActionBtn');
+        const serviceActionLabel = document.getElementById('serviceActionLabel');
         const accountActionLabel = document.getElementById('accountActionLabel');
         const guideSummary = document.getElementById('guideSummary');
         const guideBody = document.getElementById('guideBody');
@@ -1220,13 +1388,13 @@ HTML = """<!DOCTYPE html>
         serverState.textContent = payload.running
           ? `运行中 · PID ${payload.pid || '--'}`
           : '已停止';
-        serverState.className = 'value ' + (payload.running ? 'ok' : 'warn');
-        serverIcon.className = 'status-icon ' + (payload.running ? 'ok' : '');
+        serverState.className = 'service-status-text ' + (payload.running ? 'ok' : 'warn');
+        serverIcon.className = 'status-dot ' + (payload.running ? 'ok' : '');
         barDot.className = 'dot ' + (payload.running ? 'ok' : '');
         barService.textContent = payload.running ? '本地服务：运行中' : '本地服务：已停止';
         barPort.textContent = payload.port || '--';
         modeLabel.textContent = payload.packaged ? 'App sidecar' : '开发模式';
-        storageNotice.textContent = `数据目录：${payload.app_data_dir || '--'}`;
+        storageNotice.textContent = payload.app_data_dir || '--';
         if (payload.chrome_available) {
           chromeNotice.className = 'notice-ok';
           chromeNotice.textContent = '已检测到 Google Chrome。Token BI 会使用本机 Chrome 登录 Codex 并读取 usage。';
@@ -1241,6 +1409,8 @@ HTML = """<!DOCTYPE html>
         } else {
           accountState.textContent = '暂无账号';
         }
+        serviceActionLabel.textContent = payload.service_action_label || (payload.running ? '关闭服务' : '开启服务');
+        serviceActionBtn.className = payload.running ? 'service-stop' : 'primary';
         accountActionLabel.textContent = payload.account_action_label || '登录账号';
 
         const guide = payload.guide || { completed: false, items: [] };
@@ -1340,8 +1510,7 @@ HTML = """<!DOCTYPE html>
         renderStatus(payload);
       }
 
-      document.getElementById('startBtn').addEventListener('click', () => postAction('/api/start'));
-      document.getElementById('stopBtn').addEventListener('click', () => postAction('/api/stop'));
+      document.getElementById('serviceActionBtn').addEventListener('click', () => postAction('/api/service-action'));
       document.getElementById('accountActionBtn').addEventListener('click', () => postAction('/api/account-action'));
       document.getElementById('openDashboardBtn').addEventListener('click', () => postAction('/api/open-dashboard'));
       document.getElementById('pairDeviceBtn').addEventListener('click', openPairModal);
@@ -1404,6 +1573,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/service-action":
+            self._send_json(_service_action_flow())
+            return
         if parsed.path == "/api/start":
             ok, message = _start_main_server_process()
             self._send_json({"ok": ok, "message": message})
