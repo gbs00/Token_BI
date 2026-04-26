@@ -745,6 +745,12 @@ HTML = """<!DOCTYPE html>
         display: grid;
         grid-template-columns: 1fr 1.65fr 1fr;
         gap: 14px;
+        align-items: stretch;
+        transition: grid-template-columns .18s ease;
+      }
+      .control-grid.guide-compact-layout {
+        grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+        align-items: start;
       }
       .mini-card {
         padding: 18px;
@@ -776,6 +782,25 @@ HTML = """<!DOCTYPE html>
       }
       .guide {
         margin-top: 0;
+        transition:
+          min-height .18s ease,
+          padding .18s ease,
+          background .18s ease,
+          border-color .18s ease;
+      }
+      .guide.compact {
+        order: -1;
+        grid-column: 1 / -1;
+        align-self: start;
+        justify-self: stretch;
+        width: 100%;
+        max-width: none;
+        min-height: auto;
+        padding: 14px 18px;
+        border-radius: 14px;
+        border-color: rgba(125, 225, 132, .24);
+        background:
+          linear-gradient(180deg, rgba(125, 225, 132, .10), rgba(28, 39, 55, .72));
       }
       .guide-head {
         min-height: auto;
@@ -785,6 +810,24 @@ HTML = """<!DOCTYPE html>
         border-radius: 0;
         background: transparent;
         color: var(--text);
+      }
+      .guide.compact .guide-head {
+        width: 100%;
+        min-height: 34px;
+        gap: 18px;
+      }
+      #guideSummary {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: .04em;
+      }
+      .guide.compact #guideSummary {
+        padding: 6px 10px;
+        border: 1px solid rgba(125, 225, 132, .28);
+        border-radius: 999px;
+        color: var(--ok);
+        background: rgba(125, 225, 132, .08);
       }
       .guide-body {
         margin-top: 22px;
@@ -1207,6 +1250,8 @@ HTML = """<!DOCTYPE html>
         .shell { padding: 24px 18px 84px; }
         .topbar, .top-actions { align-items: flex-start; flex-direction: column; }
         .info-grid, .control-grid, .workspace-grid { grid-template-columns: 1fr; }
+        .control-grid.guide-compact-layout { grid-template-columns: 1fr; }
+        .guide.compact { justify-self: stretch; max-width: none; }
         .guide-body { grid-template-columns: 1fr; }
         .link-row { grid-template-columns: 1fr auto auto; }
         .link-label { grid-column: 1 / -1; }
@@ -1254,7 +1299,7 @@ HTML = """<!DOCTYPE html>
           </article>
         </div>
 
-        <div class="control-grid">
+        <div class="control-grid" id="controlGrid">
           <article class="mini-card account-panel">
             <div class="section-title">当前账号</div>
             <div class="account-value" id="accountState">--</div>
@@ -1356,10 +1401,30 @@ HTML = """<!DOCTYPE html>
     <script>
       let latestUrls = {};
       let latestRunning = false;
+      let guideExpandedByUser = false;
 
       async function readStatus() {
         const res = await fetch('/api/status');
         return await res.json();
+      }
+
+      function updateGuideDisplay(guideCompleted) {
+        const controlGrid = document.getElementById('controlGrid');
+        const firstRunGuide = document.getElementById('firstRunGuide');
+        const guideToggle = document.getElementById('guideToggle');
+        const guideSummary = document.getElementById('guideSummary');
+        const guideBody = document.getElementById('guideBody');
+        const showGuideBody = !guideCompleted || guideExpandedByUser;
+
+        controlGrid.classList.toggle('guide-compact-layout', guideCompleted && !showGuideBody);
+        firstRunGuide.classList.toggle('completed', guideCompleted);
+        firstRunGuide.classList.toggle('compact', guideCompleted && !showGuideBody);
+        firstRunGuide.classList.toggle('expanded', guideCompleted && showGuideBody);
+        guideBody.classList.toggle('collapsed', !showGuideBody);
+        guideSummary.textContent = guideCompleted
+          ? (showGuideBody ? '收起引导' : '查看引导')
+          : '按步骤完成连接';
+        guideToggle.setAttribute('aria-expanded', String(showGuideBody));
       }
 
       function renderStatus(payload) {
@@ -1414,8 +1479,10 @@ HTML = """<!DOCTYPE html>
         accountActionLabel.textContent = payload.account_action_label || '登录账号';
 
         const guide = payload.guide || { completed: false, items: [] };
-        guideSummary.textContent = guide.completed ? '已完成' : '按步骤完成连接';
-        guideBody.classList.toggle('collapsed', Boolean(guide.completed));
+        const guideCompleted = Boolean(guide.completed);
+        if (!guideCompleted) {
+          guideExpandedByUser = false;
+        }
         guideBody.innerHTML = '';
         (guide.items || []).forEach((item) => {
           const step = document.createElement('div');
@@ -1429,6 +1496,7 @@ HTML = """<!DOCTYPE html>
           step.appendChild(label);
           guideBody.appendChild(step);
         });
+        updateGuideDisplay(guideCompleted);
 
         fixedUrl.textContent = payload.urls.fixed || '不可用';
         lanUrl.textContent = payload.urls.lan || '不可用';
@@ -1518,7 +1586,17 @@ HTML = """<!DOCTYPE html>
       document.getElementById('refreshBtn').addEventListener('click', () => postAction('/api/refresh-status'));
       document.getElementById('clearLogBtn').addEventListener('click', () => postAction('/api/clear-log'));
       document.getElementById('guideToggle').addEventListener('click', () => {
-        document.getElementById('guideBody').classList.toggle('collapsed');
+        const firstRunGuide = document.getElementById('firstRunGuide');
+        const guideBody = document.getElementById('guideBody');
+        if (firstRunGuide.classList.contains('completed')) {
+          guideExpandedByUser = !guideExpandedByUser;
+          updateGuideDisplay(true);
+          return;
+        }
+        guideBody.classList.toggle('collapsed');
+        document
+          .getElementById('guideToggle')
+          .setAttribute('aria-expanded', String(!guideBody.classList.contains('collapsed')));
       });
       document.getElementById('pairModal').addEventListener('click', (event) => {
         if (event.target.id === 'pairModal') {

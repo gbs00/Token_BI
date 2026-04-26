@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 
 from scripts import control_panel
@@ -106,3 +107,23 @@ def test_control_panel_uses_design_grid_layout() -> None:
     assert 'class="control-grid"' in control_panel.HTML
     assert 'class="workspace-grid"' in control_panel.HTML
     assert "本机隐私说明" not in control_panel.HTML
+
+
+def test_completed_first_run_guide_collapses_to_reopenable_tab() -> None:
+    assert 'id="controlGrid"' in control_panel.HTML
+    assert ".guide.compact" in control_panel.HTML
+    assert ".control-grid.guide-compact-layout" in control_panel.HTML
+    compact_match = re.search(r"\.guide\.compact \{(?P<body>.*?)\n      \}", control_panel.HTML, re.S)
+    assert compact_match is not None
+    compact_css = compact_match.group("body")
+    assert "justify-self: stretch" in compact_css
+    assert "width: 100%" in compact_css
+    assert "max-width: none" in compact_css
+    guide_head_match = re.search(r"\.guide\.compact \.guide-head \{(?P<body>.*?)\n      \}", control_panel.HTML, re.S)
+    assert guide_head_match is not None
+    assert "width: 100%" in guide_head_match.group("body")
+    assert "guideExpandedByUser" in control_panel.HTML
+    assert "firstRunGuide.classList.toggle('compact'" in control_panel.HTML
+    assert "controlGrid.classList.toggle('guide-compact-layout'" in control_panel.HTML
+    assert "查看引导" in control_panel.HTML
+    assert "收起引导" in control_panel.HTML

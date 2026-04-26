@@ -69,6 +69,7 @@ Before uploading:
 - The packaged App can start and stop the main service, including fallback from `8787` to the next available port
 - The account button switches between `登录账号` and `退出账号`
 - The service button switches between `开启服务` and `关闭服务`
+- The completed first-run guide collapses into a full-width compact card and can be reopened
 - The QR card only appears after clicking `扫码连接副屏` and can be closed
 - The dashboard `同步额度` button triggers a fresh usage refresh
 - The iPhone 5s / iOS Safari dashboard keeps large quota numbers and clear `left` spacing
