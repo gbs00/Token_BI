@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+import shutil
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -189,7 +190,25 @@ def minimize_account_worker(request: Request, account_id: str) -> dict:
 
 @router.get("/diagnostics")
 def diagnostics(request: Request) -> dict:
+    container = request.app.state.container
     chrome_available = _chrome_available()
+    connector_names = {connector.name for connector in container.usage_connector_manager.connectors}
+    oauth_connector = next(
+        (connector for connector in container.usage_connector_manager.connectors if connector.name == "codex_oauth"),
+        None,
+    )
+    codex_auth_available = bool(
+        oauth_connector is not None
+        and hasattr(oauth_connector, "auth_available")
+        and oauth_connector.auth_available()
+    )
+    codex_cli_available = shutil.which(container.settings.codex_cli_bin) is not None
+    last_connector_error = "No connector errors recorded."
+    if container.usage_connector_manager.last_connector_errors:
+        last_connector_error = "；".join(
+            f"{item['connector_name']} {item['error_type']}"
+            for item in container.usage_connector_manager.last_connector_errors
+        )
     items = [
         {
             "code": "service_ready",
@@ -214,6 +233,42 @@ def diagnostics(request: Request) -> dict:
             "title": "副屏连接",
             "severity": "info",
             "next_step": "副屏设备需和 Mac 位于同一局域网；如果 .local 不可达，请改用局域网 IP 入口。",
+        },
+        {
+            "code": "codex_auth_available",
+            "title": "Codex 本机登录态",
+            "severity": "ok" if codex_auth_available else "warning",
+            "next_step": "未检测到可用本机登录态时，请在 Codex App 或 Codex CLI 完成一次登录授权。",
+        },
+        {
+            "code": "codex_cli_available",
+            "title": "Codex CLI 能力",
+            "severity": "ok" if codex_cli_available else "warning",
+            "next_step": "未检测到 Codex CLI 时，Token BI 会跳过 CLI RPC 并尝试下一条数据源。",
+        },
+        {
+            "code": "oauth_connector_ready",
+            "title": "OAuth 数据源",
+            "severity": "ok" if "codex_oauth" in connector_names else "warning",
+            "next_step": "OAuth 数据源是常规刷新首选链路，不会打开 Chrome 页面。",
+        },
+        {
+            "code": "cli_rpc_connector_ready",
+            "title": "CLI RPC 数据源",
+            "severity": "ok" if "codex_cli_rpc" in connector_names else "warning",
+            "next_step": "OAuth 不可用时将尝试读取 Codex app-server rate limit 数据。",
+        },
+        {
+            "code": "web_session_available",
+            "title": "Web Session 兜底",
+            "severity": "info" if "browser_worker" in connector_names else "warning",
+            "next_step": "仅当前两条主链路不可用时，才进入专用 Chrome 登录窗口兜底。",
+        },
+        {
+            "code": "last_connector_error",
+            "title": "最近数据源降级",
+            "severity": "info",
+            "next_step": last_connector_error,
         },
     ]
     return {"items": items}

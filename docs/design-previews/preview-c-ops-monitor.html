@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Token BI 控制台预览 C - Ops Monitor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0c0f;
+        --panel: #13171d;
+        --panel-2: #171b22;
+        --line: #293340;
+        --text: #eef3f8;
+        --muted: #8b98a9;
+        --green: #4ade80;
+        --cyan: #22d3ee;
+        --amber: #fbbf24;
+        --red: #fb7185;
+        --violet: #a78bfa;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .layout {
+        min-height: 100vh;
+        padding: 22px;
+        display: grid;
+        gap: 14px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 16px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        font-size: 22px;
+        margin-bottom: 4px;
+      }
+
+      .sub {
+        color: var(--muted);
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .segmented {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid #344050;
+        background: #0e1217;
+        border-radius: 8px;
+        gap: 3px;
+      }
+
+      .segmented button {
+        border: 0;
+        color: var(--muted);
+        background: transparent;
+        height: 30px;
+        padding: 0 12px;
+        border-radius: 6px;
+        font-weight: 700;
+      }
+
+      .segmented button.active {
+        background: #1d2630;
+        color: var(--text);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 0.9fr;
+        gap: 14px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: var(--radius);
+        padding: 16px;
+      }
+
+      .wide {
+        grid-column: span 2;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .panel-head h2 {
+        font-size: 16px;
+        margin: 0;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        height: 24px;
+        border-radius: 6px;
+        padding: 0 8px;
+        background: #10251b;
+        border: 1px solid #1f6f45;
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .chain {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+
+      .chain-step {
+        min-height: 126px;
+        background: var(--panel-2);
+        border: 1px solid #252d38;
+        border-radius: var(--radius);
+        padding: 14px;
+        position: relative;
+      }
+
+      .chain-step::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -11px;
+        width: 12px;
+        height: 1px;
+        background: #3a4655;
+      }
+
+      .chain-step:last-child::after {
+        display: none;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 0 4px #24352a;
+        margin-bottom: 18px;
+      }
+
+      .status-dot.idle {
+        background: var(--amber);
+        box-shadow: 0 0 0 4px #3a3020;
+      }
+
+      .status-dot.off {
+        background: #6b7280;
+        box-shadow: 0 0 0 4px #252b35;
+      }
+
+      .chain-step h3 {
+        margin-bottom: 7px;
+        font-size: 14px;
+      }
+
+      .chain-step p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 0;
+      }
+
+      .matrix {
+        display: grid;
+        grid-template-columns: 120px repeat(7, 1fr);
+        gap: 6px;
+        align-items: center;
+      }
+
+      .matrix span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .cell {
+        height: 26px;
+        border-radius: 5px;
+        background: #242b34;
+        border: 1px solid #303947;
+      }
+
+      .cell.high {
+        background: #14532d;
+        border-color: #28794a;
+      }
+
+      .cell.mid {
+        background: #164e63;
+        border-color: #1f7b91;
+      }
+
+      .cell.low {
+        background: #713f12;
+        border-color: #9a6014;
+      }
+
+      .table {
+        display: grid;
+        gap: 8px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        border-radius: 8px;
+        background: var(--panel-2);
+        border: 1px solid #252d38;
+      }
+
+      .row strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .row span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .bullet {
+        height: 10px;
+        width: 120px;
+        border-radius: 999px;
+        background: #252c35;
+        overflow: hidden;
+      }
+
+      .bullet div {
+        height: 100%;
+        border-radius: inherit;
+      }
+
+      .alert {
+        display: grid;
+        gap: 8px;
+      }
+
+      .alert-item {
+        border-radius: 8px;
+        border: 1px solid #374151;
+        background: #151a21;
+        padding: 12px;
+      }
+
+      .alert-item h3 {
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+
+      .alert-item p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 0;
+      }
+
+      .log {
+        display: grid;
+        gap: 10px;
+      }
+
+      .log-line {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .log-line strong {
+        color: var(--text);
+      }
+
+      @media (max-width: 1020px) {
+        header,
+        .grid,
+        .chain {
+          grid-template-columns: 1fr;
+        }
+
+        .wide {
+          grid-column: span 1;
+        }
+
+        .chain-step::after {
+          display: none;
+        }
+
+        .matrix {
+          grid-template-columns: 80px repeat(7, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <div>
+          <h1>Token BI 运维式控制台</h1>
+          <p class="sub">面向“是否正常、为何降级、下一步怎么做”的高密度夜间控制台。</p>
+        </div>
+        <div class="segmented" aria-label="视图切换">
+          <button class="active">概览</button>
+          <button>数据源</button>
+          <button>日志</button>
+        </div>
+      </header>
+
+      <section class="grid">
+        <section class="panel wide">
+          <div class="panel-head">
+            <h2>读取链路</h2>
+            <span class="tag">常规刷新未触发 Chrome</span>
+          </div>
+          <div class="chain">
+            <article class="chain-step">
+              <div class="status-dot"></div>
+              <h3>Codex Auth</h3>
+              <p>读取本机 auth.json，脱敏账号已识别。</p>
+            </article>
+            <article class="chain-step">
+              <div class="status-dot"></div>
+              <h3>OAuth Usage</h3>
+              <p>命中官方 usage 后端，返回动态窗口。</p>
+            </article>
+            <article class="chain-step">
+              <div class="status-dot idle"></div>
+              <h3>CLI RPC</h3>
+              <p>fallback ready，当前无需调用。</p>
+            </article>
+            <article class="chain-step">
+              <div class="status-dot off"></div>
+              <h3>Web Session</h3>
+              <p>standby，只有主链路失败才打开专用登录窗口。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>窗口热力</h2>
+            <span class="tag">AntV heatmap 语义</span>
+          </div>
+          <div class="matrix" aria-label="额度窗口健康热力图">
+            <span></span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+            <span>Weekly</span><div class="cell high"></div><div class="cell high"></div><div class="cell high"></div><div class="cell mid"></div><div class="cell mid"></div><div class="cell high"></div><div class="cell high"></div>
+            <span>5h</span><div class="cell mid"></div><div class="cell high"></div><div class="cell low"></div><div class="cell mid"></div><div class="cell high"></div><div class="cell mid"></div><div class="cell high"></div>
+            <span>Unknown</span><div class="cell"></div><div class="cell"></div><div class="cell low"></div><div class="cell low"></div><div class="cell mid"></div><div class="cell"></div><div class="cell"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>窗口列表</h2>
+            <span class="tag">动态渲染</span>
+          </div>
+          <div class="table">
+            <div class="row">
+              <div><strong>Codex Weekly</strong><span>84% · reset Sat 16:00</span></div>
+              <div class="bullet"><div style="width: 84%; background: var(--green)"></div></div>
+            </div>
+            <div class="row">
+              <div><strong>Codex 5h Window</strong><span>61% · reset 18:30</span></div>
+              <div class="bullet"><div style="width: 61%; background: var(--cyan)"></div></div>
+            </div>
+            <div class="row">
+              <div><strong>Unknown Window</strong><span>29% · official new field</span></div>
+              <div class="bullet"><div style="width: 29%; background: var(--amber)"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>异常提示</h2>
+            <span class="tag">可执行</span>
+          </div>
+          <div class="alert">
+            <article class="alert-item">
+              <h3>结构变化</h3>
+              <p>保留上次成功数据，提示“官方额度指标变化，Token BI 更新中”。</p>
+            </article>
+            <article class="alert-item">
+              <h3>登录态失效</h3>
+              <p>展示重新授权按钮；不删除用户日常 Codex CLI 登录态。</p>
+            </article>
+            <article class="alert-item">
+              <h3>429 限流</h3>
+              <p>显示退避倒计时，避免连续猛刷。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <div class="panel-head">
+            <h2>运行日志</h2>
+            <span class="tag">脱敏摘要</span>
+          </div>
+          <div class="log">
+            <div class="log-line"><span>00:28</span><strong>OAuth usage 成功 · windows: 3 · account: 8754****@qq.com</strong></div>
+            <div class="log-line"><span>00:26</span><strong>CLI RPC ready · method: account/rateLimits/read</strong></div>
+            <div class="log-line"><span>00:24</span><strong>Chrome worker standby · not launched by regular refresh</strong></div>
+            <div class="log-line"><span>00:21</span><strong>Dashboard payload rendered · raw_window omitted</strong></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

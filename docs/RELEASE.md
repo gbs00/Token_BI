@@ -24,10 +24,10 @@ Release flow:
 1. Ensure `CHANGELOG.md`, `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` use the same version.
 2. Push `main`.
 3. Create and push a version tag, for example `v0.9.1`.
-4. GitHub Actions builds the macOS DMG and creates a prerelease.
+4. GitHub Actions builds the macOS DMG and creates a GitHub Release.
 5. The release name is parsed from the matching `CHANGELOG.md` heading, for example `v0.9.1 - 跨设备看板与控制台体验修复`.
 
-Current release artifacts are unsigned local/development builds. Keep releases marked as prerelease until Developer ID signing and notarization are in place.
+Current release artifacts are unsigned and not notarized. Treat the GitHub Release as the official project download package, while still documenting the macOS Gatekeeper warning until Developer ID signing and notarization are in place.
 
 ## Signed Build Prerequisites
 
@@ -72,6 +72,7 @@ Before uploading:
 - The completed first-run guide collapses into a full-width compact card and can be reopened
 - The QR card only appears after clicking `扫码连接副屏` and can be closed
 - The dashboard `同步额度` button triggers a fresh usage refresh
+- The dashboard supports weekly-only usage when Codex analytics no longer returns the 5h/session quota
 - The iPhone 5s / iOS Safari dashboard keeps large quota numbers and clear `left` spacing
 - The DMG can be mounted and the App can be copied to `/Applications`
 - Release notes summarize user-visible changes and known limitations

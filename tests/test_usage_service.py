@@ -46,6 +46,92 @@ class FakeConnectorManager:
                     "is_estimated": False,
                 },
             )
+        if self.mode == "weekly_only":
+            now = datetime.now(timezone.utc)
+            return UsageConnectorResult(
+                connector_name="web_session",
+                source_type="scraped",
+                source_detail="network_response",
+                payload={
+                    "weekly_remaining_pct": 89,
+                    "weekly_reset_at": now + timedelta(days=5),
+                    "updated_at": now,
+                    "is_estimated": False,
+                },
+            )
+        if self.mode == "official_single_window":
+            now = datetime.now(timezone.utc)
+            return UsageConnectorResult(
+                connector_name="codex_oauth",
+                source_type="oauth",
+                source_detail="oauth_usage_api",
+                payload={
+                    "account_masked_email": "user****@example.com",
+                    "updated_at": now,
+                    "is_estimated": False,
+                    "windows": [
+                        {
+                            "display_name": "Codex Pro window",
+                            "remaining_pct": 58,
+                            "reset_at": now + timedelta(hours=7),
+                            "window_seconds": 25200,
+                            "window_minutes": 420,
+                            "source_type": "oauth",
+                            "source_detail": "oauth_usage_api",
+                        }
+                    ],
+                },
+            )
+        if self.mode == "official_known_windows":
+            now = datetime.now(timezone.utc)
+            return UsageConnectorResult(
+                connector_name="codex_oauth",
+                source_type="oauth",
+                source_detail="oauth_usage_api",
+                payload={
+                    "updated_at": now,
+                    "is_estimated": False,
+                    "windows": [
+                        {
+                            "display_name": "5h window",
+                            "remaining_pct": 84,
+                            "reset_at": now + timedelta(hours=3),
+                            "window_minutes": 300,
+                            "source_type": "oauth",
+                            "source_detail": "oauth_usage_api",
+                        },
+                        {
+                            "display_name": "Weekly",
+                            "remaining_pct": 61,
+                            "reset_at": now + timedelta(days=4),
+                            "window_seconds": 604800,
+                            "source_type": "oauth",
+                            "source_detail": "oauth_usage_api",
+                        },
+                    ],
+                },
+            )
+        if self.mode == "sensitive_raw_window":
+            now = datetime.now(timezone.utc)
+            return UsageConnectorResult(
+                connector_name="codex_oauth",
+                source_type="oauth",
+                source_detail="oauth_usage_api",
+                payload={
+                    "updated_at": now,
+                    "is_estimated": False,
+                    "windows": [
+                        {
+                            "raw_window": {"access_token": "secret-token"},
+                            "display_name": "Codex window",
+                            "remaining_pct": 50,
+                            "reset_at": now + timedelta(hours=1),
+                            "source_type": "oauth",
+                            "source_detail": "oauth_usage_api",
+                        }
+                    ],
+                },
+            )
         if self.mode == "structure_changed":
             raise AnalyticsPageChangedError("Analytics page may have changed.")
         if self.mode == "expired":
@@ -67,6 +153,25 @@ def _make_active_account(container):
 def test_usage_service_returns_empty_when_no_accounts(container) -> None:
     payload = container.usage_service.get_dashboard()
     assert payload.state == PageState.EMPTY
+
+
+def test_usage_service_bootstraps_local_codex_account_when_no_records(container) -> None:
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="official_single_window"),
+    )
+
+    payload = service.get_dashboard()
+    accounts = container.account_service.list_accounts()
+
+    assert payload.state == PageState.READY
+    assert payload.account is not None
+    assert payload.account.status == AccountStatus.ACTIVE
+    assert payload.account.masked_email == "user****@example.com"
+    assert [account.masked_email for account in accounts] == ["user****@example.com"]
+    assert payload.metrics == []
 
 
 def test_usage_service_returns_ready_and_caches(container) -> None:
@@ -105,6 +210,71 @@ def test_usage_service_uses_connector_metadata(container) -> None:
     assert payload.summary.connector_name == "local_codex"
 
 
+def test_usage_service_omits_session_metric_when_only_weekly_quota_exists(container) -> None:
+    account = _make_active_account(container)
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="weekly_only"),
+    )
+
+    payload = service.get_dashboard(account.account_id)
+
+    assert payload.state == PageState.READY
+    assert [metric.metric_type for metric in payload.metrics] == ["weekly"]
+    assert payload.metrics[0].remaining_pct == 89
+
+
+def test_usage_service_filters_unknown_official_windows_from_dashboard_metrics(container) -> None:
+    account = _make_active_account(container)
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="official_single_window"),
+    )
+
+    payload = service.get_dashboard(account.account_id)
+
+    assert payload.state == PageState.READY
+    assert payload.metrics == []
+
+
+def test_usage_service_normalizes_known_official_windows_for_dashboard(container) -> None:
+    account = _make_active_account(container)
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="official_known_windows"),
+    )
+
+    payload = service.get_dashboard(account.account_id)
+
+    assert payload.state == PageState.READY
+    assert [metric.metric_type for metric in payload.metrics] == ["session", "weekly"]
+    assert [metric.label for metric in payload.metrics] == ["5h 额度", "周额度"]
+    assert [metric.remaining_pct for metric in payload.metrics] == [84, 61]
+    assert [metric.source_type for metric in payload.metrics] == ["oauth", "oauth"]
+
+
+def test_usage_service_does_not_expose_raw_window_in_dashboard_payload(container) -> None:
+    account = _make_active_account(container)
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="sensitive_raw_window"),
+    )
+
+    payload = service.get_dashboard(account.account_id)
+
+    dumped = payload.model_dump_json()
+    assert "raw_window" not in dumped
+    assert "secret-token" not in dumped
+
+
 def test_usage_service_returns_stale_when_fetch_fails_after_success(container) -> None:
     account = _make_active_account(container)
     service = UsageService(
@@ -125,7 +295,7 @@ def test_usage_service_returns_stale_when_fetch_fails_after_success(container) -
         connector_manager=FakeConnectorManager(mode="structure_changed"),
     )
     stale = failing_service.get_dashboard(account.account_id)
-    assert stale.state == PageState.STALE
+    assert stale.state == PageState.SOURCE_CHANGED
     assert stale.message == "Analytics page may have changed."
 
 

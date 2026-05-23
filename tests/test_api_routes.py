@@ -192,7 +192,45 @@ def test_diagnostics_returns_actionable_copy_for_common_states(app) -> None:
     codes = {item["code"] for item in payload["items"]}
     assert "service_ready" in codes
     assert "chrome_available" in codes
+    assert "codex_auth_available" in codes
+    assert "codex_cli_available" in codes
+    assert "oauth_connector_ready" in codes
+    assert "cli_rpc_connector_ready" in codes
+    assert "web_session_available" in codes
+    assert "last_connector_error" in codes
     assert all(item["title"] and item["next_step"] for item in payload["items"])
+
+
+def test_service_startup_does_not_launch_browser_worker_for_active_accounts(container) -> None:
+    now = datetime.now(timezone.utc)
+    container.account_service._write_accounts(
+        [
+            AccountRecord(
+                account_id="acc_real_active",
+                account_alias="user****@example.com",
+                masked_email="user****@example.com",
+                status=AccountStatus.ACTIVE,
+                session_storage_path="/tmp/acc_real_active",
+                created_at=now,
+                last_validated_at=now,
+            )
+        ]
+    )
+    launched: list[str] = []
+    container.browser_worker_service.ensure_worker_for_account = lambda account, target_url=None: launched.append(
+        account.account_id
+    )
+
+    container.startup()
+
+    assert launched == []
+
+
+def test_connector_order_prioritizes_oauth_and_cli_before_web_session(container) -> None:
+    connector_names = [connector.name for connector in container.usage_connector_manager.connectors]
+
+    assert connector_names[:2] == ["codex_oauth", "codex_cli_rpc"]
+    assert connector_names[-1] == "browser_worker"
 
 
 def test_reauth_endpoint_starts_live_browser_worker(app) -> None:

@@ -1,5 +1,8 @@
 # Token BI 技术架构文档
 
+> 当前 V1.0.0 技术设计已迁移至 [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)。
+> 本文件保留 v0.9.1 / MVP 技术基线，用于对照历史实现；后续 1.0.0 开发以版本化技术文档为准。
+
 ## 1. 文档目的
 
 本文件用于指导 `Token_BI` 的 MVP 开发实现。
@@ -19,7 +22,8 @@
 当前开发基线为 `v0.9.1`：
 
 - 控制台采用桌面 App 信息面板布局，服务启停合并为一个状态按钮。
-- 副屏看板采用双额度卡布局，账号直显，不提供下拉切换控件。
+- 副屏看板按实际 usage 指标渲染额度卡，账号直显，不提供下拉切换控件。
+- Codex 官方 analytics 删除 `5h` 额度后，`session_*` 字段被视为可选；只返回 `weekly_*` 时看板进入周额度单卡模式。
 - `同步额度` 作为看板手动刷新入口，强制同步最新 usage。
 - iPhone 5s / iOS Safari 作为旧设备兼容下限，关键字号与间距需要提供旧 Safari 可识别的 CSS fallback。
 
@@ -38,8 +42,8 @@
 - `Codex` 单 agent 页面
 - 当前账号直显
 - 当前账号脱敏信息展示
-- `5 小时额度`
 - `周额度`
+- `5 小时额度`：可选，取决于 Codex 官方 analytics 是否继续返回
 - `最近更新时间`
 - `Usage 入口` 外链
 - 局域网内访问
@@ -468,13 +472,13 @@ MVP 状态：
   "connector_name": "web_session",
   "is_estimated": false,
   "updated_at": "2026-04-21T23:00:00+08:00",
-  "session_remaining_pct": 100,
-  "session_reset_at": "2026-04-22T03:00:00+08:00",
   "weekly_remaining_pct": 92,
   "weekly_reset_at": "2026-04-28T00:00:00+08:00",
   "usage_detail_url": "https://chatgpt.com/codex/cloud/settings/analytics#usage"
 }
 ```
+
+说明：`session_remaining_pct` 与 `session_reset_at` 是可选字段。Codex 官方页面删除 `5h` 额度后，后端只返回 `weekly_remaining_pct` 与 `weekly_reset_at`，前端只渲染周额度卡。
 
 ## 7.7 Cache Service
 

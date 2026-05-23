@@ -81,5 +81,5 @@ jobs:
           name: ${{ steps.notes.outputs.name }}
           body_path: ${{ steps.notes.outputs.body_path }}
           files: src-tauri/target/release/bundle/dmg/*.dmg
-          prerelease: true
+          prerelease: false
           fail_on_unmatched_files: true

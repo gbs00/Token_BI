@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.models.account import AccountRecord, AccountStatus
@@ -147,7 +147,7 @@ def test_visible_accounts_falls_back_to_pending_when_no_active_exists(container)
                 masked_email="team****@gmail.com",
                 status=AccountStatus.PENDING,
                 session_storage_path="/tmp/acc_pending_b",
-                created_at=now.replace(second=(now.second + 1) % 60),
+                created_at=now + timedelta(seconds=1),
             ),
         ]
     )

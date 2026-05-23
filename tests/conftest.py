@@ -41,6 +41,11 @@ def test_settings(tmp_path: Path) -> Settings:
         playwright_headless=True,
         scrape_timeout_ms=5000,
         mock_scraper_enabled=False,
+        codex_auth_paths=[project_root / "missing-codex-auth.json"],
+        codex_oauth_usage_url="https://chatgpt.com/backend-api/wham/usage",
+        codex_cli_bin="missing-codex-for-tests",
+        codex_cli_timeout_seconds=2.0,
+        local_snapshot_connector_enabled=True,
     )
     settings.ensure_directories()
     settings.accounts_file.write_text(json.dumps({"accounts": []}) + "\n", encoding="utf-8")

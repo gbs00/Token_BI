@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Token BI 控制台预览 A - Integrated Console</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d10;
+        --panel: #141820;
+        --panel-2: #101318;
+        --line: #26303c;
+        --muted: #8b96a8;
+        --text: #edf2f7;
+        --soft: #c9d2df;
+        --green: #4ade80;
+        --cyan: #22d3ee;
+        --amber: #fbbf24;
+        --blue: #60a5fa;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .content {
+        min-height: 100vh;
+        padding: 22px;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 18px;
+      }
+
+      .eyebrow {
+        margin: 0 0 6px;
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        font-size: 24px;
+        margin-bottom: 0;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .button {
+        height: 36px;
+        border: 1px solid #344050;
+        background: #151b23;
+        color: var(--soft);
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        font-weight: 650;
+      }
+
+      .button.primary {
+        background: #0f766e;
+        border-color: #2dd4bf;
+        color: #f8fffe;
+      }
+
+      .status-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .stat,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .stat {
+        padding: 14px;
+      }
+
+      .stat span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .stat strong {
+        font-size: 26px;
+        line-height: 1;
+      }
+
+      .stat small {
+        margin-left: 8px;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+        gap: 12px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .panel-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .panel-title h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 6px;
+        background: #10251b;
+        color: var(--green);
+        border: 1px solid #1f6f45;
+        font-size: 12px;
+      }
+
+      .operation-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+      }
+
+      .operation {
+        padding: 14px;
+        border-radius: 8px;
+        background: var(--panel-2);
+        border: 1px solid #252d38;
+      }
+
+      .operation h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+
+      .operation p {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 12px;
+      }
+
+      .service-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .source-row {
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        background: var(--panel-2);
+        border: 1px solid #252d38;
+        border-radius: 8px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--muted);
+        box-shadow: 0 0 0 4px #252b35;
+      }
+
+      .dot.ok {
+        background: var(--green);
+      }
+
+      .dot.warn {
+        background: var(--amber);
+      }
+
+      .source-row strong {
+        display: block;
+        font-size: 14px;
+      }
+
+      .source-row span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .quota-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px;
+        background: var(--panel-2);
+        border: 1px solid #252d38;
+        border-radius: 8px;
+      }
+
+      .quota-row + .quota-row {
+        margin-top: 10px;
+      }
+
+      .quota-row h3 {
+        margin: 0 0 7px;
+        font-size: 14px;
+      }
+
+      .bar {
+        height: 8px;
+        background: #252b35;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .fill {
+        height: 100%;
+        border-radius: inherit;
+      }
+
+      .qr-grid {
+        display: grid;
+        grid-template-columns: 116px 1fr;
+        gap: 14px;
+        align-items: center;
+      }
+
+      .qr {
+        height: 116px;
+        background:
+          linear-gradient(90deg, #0c1116 8px, transparent 8px) 0 0 / 16px 16px,
+          linear-gradient(#0c1116 8px, transparent 8px) 0 0 / 16px 16px,
+          #e6edf5;
+        border-radius: 6px;
+        border: 8px solid #e6edf5;
+      }
+
+      @media (max-width: 980px) {
+        .status-strip,
+        .grid,
+        .operation-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Tauri 控制台 · 管理操作和服务状态在同一工作台内完成</p>
+          <h1>Token BI 控制台</h1>
+        </div>
+        <div class="actions">
+          <button class="button">打开看板</button>
+          <button class="button primary">同步额度</button>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-label="关键状态">
+        <div class="stat"><span>当前账号</span><strong>8754****</strong><small>@qq.com</small></div>
+        <div class="stat"><span>服务状态</span><strong>正常</strong><small>8787</small></div>
+        <div class="stat"><span>额度接口</span><strong>官方</strong><small>当前命中</small></div>
+        <div class="stat"><span>下次同步</span><strong>02:41</strong><small>自动</small></div>
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <div class="panel-title">
+            <h2>控制台操作</h2>
+            <span class="tag">用户动作</span>
+          </div>
+          <div class="operation-grid">
+            <article class="operation">
+              <h3>启动 / 停止服务</h3>
+              <p>控制本机 Token BI 后端服务，无需进入额外页面。</p>
+              <button class="button primary">服务已启动</button>
+            </article>
+            <article class="operation">
+              <h3>账号授权</h3>
+              <p>优先复用本机 Codex 登录态；需要时再引导登录。</p>
+              <button class="button">管理账号</button>
+            </article>
+            <article class="operation">
+              <h3>同步额度</h3>
+              <p>手动绕过短时缓存，刷新官方额度窗口。</p>
+              <button class="button">立即同步</button>
+            </article>
+            <article class="operation">
+              <h3>副屏连接</h3>
+              <p>扫码或复制局域网地址，在副屏打开 BI 看板。</p>
+              <button class="button">复制地址</button>
+            </article>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <h2>服务状态</h2>
+            <span class="tag">服务内置</span>
+          </div>
+          <div class="service-list">
+            <div class="source-row">
+              <span class="dot ok"></span>
+              <div><strong>官方额度接口</strong><span>当前命中，直接返回额度窗口</span></div>
+              <span class="tag">正常</span>
+            </div>
+            <div class="source-row">
+              <span class="dot ok"></span>
+              <div><strong>本机 Codex 登录态</strong><span>已识别本机登录账号</span></div>
+              <span>待命</span>
+            </div>
+            <div class="source-row">
+              <span class="dot ok"></span>
+              <div><strong>Token BI 本地服务</strong><span>控制台和服务状态留在同一 Tauri 窗口</span></div>
+              <span>8787</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <h2>当前额度摘要</h2>
+            <span class="tag">同级窗口</span>
+          </div>
+          <article class="quota-row">
+            <div>
+              <h3>周额度</h3>
+              <div class="bar"><div class="fill" style="width: 84%; background: var(--green)"></div></div>
+            </div>
+            <strong style="font-size: 30px; color: var(--green)">84%</strong>
+          </article>
+          <article class="quota-row">
+            <div>
+              <h3>5h 额度</h3>
+              <div class="bar"><div class="fill" style="width: 61%; background: var(--cyan)"></div></div>
+            </div>
+            <strong style="font-size: 30px; color: var(--cyan)">61%</strong>
+          </article>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">
+            <h2>副屏入口</h2>
+            <span class="tag">局域网</span>
+          </div>
+          <div class="qr-grid">
+            <div class="qr" aria-label="二维码占位"></div>
+            <div>
+              <h3>http://token-bi.local:8787/dashboard</h3>
+              <p style="color: var(--muted); margin-bottom: 12px">控制台和服务状态留在 Tauri；副屏只展示额度。</p>
+              <button class="button">复制</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

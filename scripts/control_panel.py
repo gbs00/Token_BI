@@ -417,6 +417,10 @@ def _refresh_live_accounts() -> dict:
                     "account_id": account_id,
                     "state": payload.get("state"),
                     "masked_email": (payload.get("account") or {}).get("masked_email"),
+                    "source_type": (payload.get("summary") or {}).get("source_type"),
+                    "source_detail": (payload.get("summary") or {}).get("source_detail"),
+                    "connector_name": (payload.get("summary") or {}).get("connector_name"),
+                    "message": payload.get("message"),
                 }
             )
         except RuntimeError as exc:
@@ -425,11 +429,55 @@ def _refresh_live_accounts() -> dict:
     ready = [item for item in results if item.get("state") == "ready"]
     if ready:
         labels = ", ".join(dict.fromkeys(item.get("masked_email") or item["account_id"] for item in ready))
-        return {"ok": True, "message": f"状态已刷新，已获取 usage：{labels}", "results": results}
+        sources = ", ".join(
+            dict.fromkeys(
+                (
+                    f"{item.get('source_type') or 'unknown'}"
+                    f"/{item.get('connector_name') or item.get('source_detail') or 'unknown'}"
+                )
+                for item in ready
+            )
+        )
+        return {
+            "ok": True,
+            "message": f"状态已刷新，已获取 usage：{labels}。数据源：{sources}",
+            "results": results,
+        }
     payload = _error_payload("login_required")
     payload["message"] = "状态已刷新，但还没有可用 usage。请确认登录窗口未关闭且已完成登录。"
     payload["results"] = results
     return payload
+
+
+def _diagnostics_items() -> list[dict]:
+    running, _ = _main_server_running()
+    if not running:
+        return []
+    try:
+        payload = _main_api_request("GET", "/api/v1/diagnostics", timeout=5)
+    except RuntimeError:
+        return []
+    return payload.get("items") or []
+
+
+def _data_source_status(diagnostics: list[dict]) -> str:
+    if not diagnostics:
+        return "数据源：服务启动后检查 OAuth / CLI RPC / Web Session"
+    by_code = {item.get("code"): item for item in diagnostics}
+    labels = []
+    for code, label in (
+        ("oauth_connector_ready", "OAuth"),
+        ("cli_rpc_connector_ready", "CLI RPC"),
+        ("web_session_available", "Web Session"),
+    ):
+        item = by_code.get(code) or {}
+        severity = item.get("severity")
+        marker = "可用" if severity in {"ok", "info"} else "需检查"
+        labels.append(f"{label}{marker}")
+    last_error = (by_code.get("last_connector_error") or {}).get("next_step")
+    if last_error and last_error != "No connector errors recorded.":
+        return f"数据源：{' / '.join(labels)}；最近降级：{last_error}"
+    return f"数据源：{' / '.join(labels)}；暂无降级记录"
 
 
 def _open_url(url: str) -> tuple[int, str]:
@@ -574,6 +622,7 @@ def _status_payload() -> dict:
     account = _preferred_account()
     urls = _dashboard_urls()
     account_action_label = _account_action_label(account)
+    diagnostics = _diagnostics_items()
     return {
         "running": running,
         "pid": pid,
@@ -586,6 +635,8 @@ def _status_payload() -> dict:
         "service_action_label": _service_action_label(running),
         "account_action_label": account_action_label,
         "guide": _guide_payload(running=running, account=account, urls=urls),
+        "diagnostics": diagnostics,
+        "data_source_status": _data_source_status(diagnostics),
         "account": {
             "masked_email": account.get("masked_email"),
             "status": account.get("status"),
@@ -1304,6 +1355,7 @@ HTML = """<!DOCTYPE html>
             <div class="section-title">当前账号</div>
             <div class="account-value" id="accountState">--</div>
             <p class="account-hint">当前仅支持一个 Codex 账号</p>
+            <p class="account-hint" id="dataSourceState">数据源：检查中</p>
             <button id="accountActionBtn" class="add"><svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a7 7 0 0 1 13 0"/><path d="M18 8v6"/><path d="M15 11h6"/></svg><span id="accountActionLabel">登录账号</span></button>
           </article>
 
@@ -1430,6 +1482,7 @@ HTML = """<!DOCTYPE html>
       function renderStatus(payload) {
         const serverState = document.getElementById('serverState');
         const accountState = document.getElementById('accountState');
+        const dataSourceState = document.getElementById('dataSourceState');
         const fixedUrl = document.getElementById('fixedUrl');
         const lanUrl = document.getElementById('lanUrl');
         const localUrl = document.getElementById('localUrl');
@@ -1474,6 +1527,7 @@ HTML = """<!DOCTYPE html>
         } else {
           accountState.textContent = '暂无账号';
         }
+        dataSourceState.textContent = payload.data_source_status || '数据源：等待同步';
         serviceActionLabel.textContent = payload.service_action_label || (payload.running ? '关闭服务' : '开启服务');
         serviceActionBtn.className = payload.running ? 'service-stop' : 'primary';
         accountActionLabel.textContent = payload.account_action_label || '登录账号';

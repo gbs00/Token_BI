@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Token BI 看板预览 B - 同级额度</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #090b0d;
+        --panel: #12161b;
+        --panel-2: #171c22;
+        --line: #27313d;
+        --text: #f4f7fb;
+        --muted: #8f9cad;
+        --green: #5ee38a;
+        --cyan: #38d5ee;
+        --blue: #2f7df6;
+        --amber: #ffd166;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .stage {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 16px;
+        padding: clamp(12px, 1.4vw, 24px);
+      }
+
+      .top-strip,
+      .quota-card {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: var(--radius);
+      }
+
+      .top-strip {
+        min-height: 86px;
+        padding: 14px;
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto auto auto;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .identity {
+        min-width: 0;
+      }
+
+      .account-chip {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: min(390px, 100%);
+        min-height: 54px;
+        padding: 10px 14px;
+        border: 1px solid #344052;
+        border-radius: 8px;
+        background: #151b24;
+        min-width: 0;
+      }
+
+      .avatar {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        border: 1px solid #384656;
+        color: var(--cyan);
+        font-weight: 800;
+        flex: 0 0 auto;
+      }
+
+      .account-chip strong {
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: clamp(17px, 1.7vw, 25px);
+      }
+
+      .account-chip span,
+      .status-item span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status-item {
+        display: grid;
+        gap: 4px;
+        min-width: 126px;
+        white-space: nowrap;
+      }
+
+      .status-item strong {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: clamp(16px, 1.45vw, 22px);
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 0 4px #163022;
+      }
+
+      .sync-button {
+        min-height: 54px;
+        padding: 0 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        border: 1px solid #4e9bff;
+        color: #f8fbff;
+        background: linear-gradient(180deg, #3385ff 0%, #246be8 100%);
+        box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14);
+        font-size: clamp(17px, 1.65vw, 24px);
+        font-weight: 700;
+      }
+
+      .quota-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(12px, 1.3vw, 20px);
+        align-content: stretch;
+      }
+
+      .quota-card {
+        padding: clamp(16px, 2.2vw, 34px);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: clamp(12px, 1.4vw, 20px);
+        min-height: 0;
+      }
+
+      .quota-head {
+        display: block;
+      }
+
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 4px;
+        font-size: 20px;
+      }
+
+      .quota-title {
+        margin: 0 0 6px;
+        font-size: clamp(28px, 3.4vw, 48px);
+      }
+
+      .radial-wrap {
+        display: grid;
+        place-items: center;
+        min-height: 0;
+      }
+
+      .radial {
+        width: min(58%, 34vh, 330px);
+        min-width: 210px;
+        aspect-ratio: 1;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        position: relative;
+      }
+
+      .radial.five-hour {
+        background: conic-gradient(var(--cyan) 0 302deg, #252c35 302deg 360deg);
+      }
+
+      .radial.weekly {
+        background: conic-gradient(var(--amber) 0 220deg, #252c35 220deg 360deg);
+      }
+
+      .radial::before {
+        content: "";
+        position: absolute;
+        inset: 24px;
+        border-radius: 50%;
+        background: var(--panel);
+        border: 1px solid #26313d;
+      }
+
+      .radial-inner {
+        position: relative;
+        text-align: center;
+      }
+
+      .radial-inner strong {
+        display: block;
+        font-size: clamp(42px, 5.2vw, 74px);
+        line-height: 1;
+      }
+
+      .radial-inner span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .quota-footer {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .footer-row {
+        display: flex;
+        justify-content: flex-end;
+        color: #cad4e3;
+        font-size: clamp(17px, 1.6vw, 24px);
+      }
+
+      @media (min-width: 1500px) {
+        .radial {
+          width: min(46%, 36vh, 360px);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .top-strip {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .quota-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .sync-button {
+          width: 100%;
+        }
+
+        .quota-card {
+          min-height: 460px;
+        }
+      }
+
+      @media (orientation: landscape) and (max-height: 620px) {
+        .stage {
+          gap: 10px;
+        }
+
+        .top-strip {
+          grid-template-columns: minmax(190px, 1fr) auto auto auto;
+          min-height: 70px;
+          padding: 10px 12px;
+        }
+
+        .quota-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .account-chip,
+        .sync-button {
+          min-height: 46px;
+        }
+
+        .quota-card {
+          min-height: 0;
+          padding: 14px;
+          gap: 8px;
+        }
+
+        .quota-title {
+          font-size: 24px;
+        }
+
+        .radial {
+          width: min(34vh, 200px);
+          min-width: 132px;
+        }
+
+        .radial::before {
+          inset: 16px;
+        }
+
+        .radial-inner strong {
+          font-size: 40px;
+        }
+
+        .footer-row {
+          font-size: 14px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .top-strip {
+          grid-template-columns: 1fr;
+          align-items: stretch;
+        }
+
+        .status-item {
+          min-width: 0;
+        }
+
+        .quota-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .quota-card {
+          min-height: 480px;
+        }
+
+        .radial {
+          width: min(88%, 300px);
+          min-width: 220px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <header class="top-strip">
+        <div class="identity">
+          <div class="account-chip" aria-label="当前账号">
+            <div class="avatar">TB</div>
+            <div>
+              <strong>guob****@gmail.com</strong>
+              <span>当前账号</span>
+            </div>
+          </div>
+        </div>
+        <div class="status-item" aria-label="数据源">
+          <span>数据源</span>
+          <strong><i class="status-dot"></i>本机服务</strong>
+        </div>
+        <div class="status-item" aria-label="下次同步">
+          <span>下次同步</span>
+          <strong>02:43</strong>
+        </div>
+        <button class="sync-button" type="button">同步额度</button>
+      </header>
+
+      <section class="quota-grid" aria-label="额度窗口">
+        <article class="quota-card">
+          <div class="quota-head">
+            <div>
+              <h1 class="quota-title">5h 额度</h1>
+            </div>
+          </div>
+          <div class="radial-wrap">
+            <div class="radial five-hour" aria-label="5h 额度剩余 84%">
+              <div class="radial-inner">
+                <strong>84%</strong>
+                <span>剩余额度</span>
+              </div>
+            </div>
+          </div>
+          <div class="quota-footer">
+            <div class="footer-row">
+              <strong>重置剩余 3h 38m</strong>
+            </div>
+          </div>
+        </article>
+
+        <article class="quota-card">
+          <div class="quota-head">
+            <div>
+              <h1 class="quota-title">周额度</h1>
+            </div>
+          </div>
+          <div class="radial-wrap">
+            <div class="radial weekly" aria-label="周额度剩余 61%">
+              <div class="radial-inner">
+                <strong>61%</strong>
+                <span>剩余额度</span>
+              </div>
+            </div>
+          </div>
+          <div class="quota-footer">
+            <div class="footer-row">
+              <strong>重置剩余 3d 9h</strong>
+            </div>
+          </div>
+        </article>
+      </section>
+
+    </main>
+  </body>
+</html>

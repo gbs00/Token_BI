@@ -4,7 +4,27 @@
 
 - [SETUP.md](/Users/gbs00/我的文件夹/Projects/Token_BI/SETUP.md)：新电脑部署、日常启动、账号登录、副屏设备访问与排障说明
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：后续开发使用的技术架构文档
+- [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)：V1.0.0 后续开发使用的技术架构文档
 - [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
+
+## 2026-05-23 V1.0.0 技术设计收敛
+
+1.0.0 的开发方向从“Chrome/CDP 抓取主链路”收敛为“Codex OAuth / Codex CLI RPC 优先，Web Session 兜底”。
+
+- 常规刷新不应弹出、切换或唤起 Chrome tab。
+- 看板展示改为官方 usage / rate limit 窗口透传，不再固定预设 `5h` / `weekly` 两类指标。
+- 官方未返回的指标不展示、不补 0；`0%` 只代表官方明确返回剩余额度为 0。
+- Web Session / DOM fallback 仅作为主链路不可用时的兜底和诊断手段。
+- 当前代码已接入 OAuth / CLI RPC connector、官方窗口动态归一化、看板动态指标卡和“启动不默认拉起 Chrome worker”的 1.0.0 主链路改造。
+- 技术设计详见 [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)。
+
+## 2026-04-29 Codex analytics 周额度单卡兼容
+
+Codex 官方 analytics 页面已删除 `5h` 额度统计。Token BI 已调整为按实际可读取指标渲染：
+
+- 如果官方只返回周额度，看板只显示 `Weekly` / `周额度` 卡片。
+- 抓取器不再要求 `session_remaining_pct` 与 `weekly_remaining_pct` 同时存在。
+- `同步额度` 成功后，即使页面此前处于 `connector_error`，也会在当前页面动态创建额度卡并恢复显示。
 
 ## 2026-04-26 v0.9.1 跨设备看板与控制台体验修复
 
@@ -115,8 +135,8 @@
 ### 2.3 主内容区
 
 - 当前账号信息卡
-- `5 小时额度`与 `剩余重置时间`
 - `周额度`与 `剩余重置时间`
+- `5 小时额度`与 `剩余重置时间`：如果 Codex 官方页面继续提供该字段则显示；若官方删除该字段则自动隐藏
 - `Usage 详情入口`
 
 ## 3. 核心产品判断
@@ -131,8 +151,8 @@
 展示口径聚焦为：
 
 1. `订阅额度口径`
-   - `5 小时额度`
    - `周额度`
+   - `5 小时额度`：可选字段，取决于 Codex 官方 analytics 是否继续返回
    - `剩余百分比`
    - `下次重置时间`
 
@@ -148,8 +168,8 @@
 MVP 保留：
 
 - 当前账号直显
-- `5 小时额度`
 - `周额度`
+- `5 小时额度`：可选展示
 - `剩余百分比`
 - `下次重置时间`
 - `最近更新时间`
@@ -441,8 +461,8 @@ MVP 可以提供 `Usage 入口`，但需要明确边界：
 | `connector_name` | string | 如 `web_session / local_codex` |
 | `is_estimated` | boolean | 是否为估算值 |
 | `updated_at` | datetime | 最近更新时间 |
-| `session_remaining_pct` | number | `5 小时额度`剩余百分比 |
-| `session_reset_at` | datetime | `5 小时额度`重置时间 |
+| `session_remaining_pct` | number | 可选，`5 小时额度`剩余百分比 |
+| `session_reset_at` | datetime | 可选，`5 小时额度`重置时间 |
 | `weekly_remaining_pct` | number | `周额度`剩余百分比 |
 | `weekly_reset_at` | datetime | `周额度`重置时间 |
 | `usage_detail_url` | string | Usage/Analytics 详情页入口 |
@@ -473,10 +493,10 @@ MVP 可以提供 `Usage 入口`，但需要明确边界：
 
 ### 额度卡片
 
-首期只保留两条主进度：
+按实际读取到的官方指标展示额度卡：
 
-- `5 小时额度`
 - `周额度`
+- `5 小时额度`：可选，官方 analytics 返回时展示；官方删除后自动隐藏
 
 每条包含：
 

@@ -16,23 +16,25 @@
     <main class="app-shell">
       <section class="phone-frame{% if accounts|length == 1 %} single-account{% endif %}">
         <section class="context-strip">
-          <div class="context-copy">
-            <div class="account-display" data-account-pill>
-              <span class="account-icon" aria-hidden="true">⌁</span>
-              <span class="account-display-email" data-account-name>
+          <div class="account-display" data-account-pill aria-label="当前账号">
+            <span class="account-icon" aria-hidden="true">TB</span>
+            <div class="account-copy">
+              <strong class="account-display-email" data-account-name>
                 {{ dashboard.account.masked_email if dashboard.account else 'No active account selected' }}
-              </span>
+              </strong>
+              <span>当前账号</span>
             </div>
           </div>
-          <div class="source-inline">
+          <div class="source-inline" aria-label="数据源">
             <span>数据源</span>
             <span class="service-dot" aria-hidden="true"></span>
-            <strong>本机服务</strong>
+            <strong data-source-label>本机服务</strong>
           </div>
-          <div class="context-actions">
-            <span class="refresh-countdown" data-refresh-countdown>下次同步 03:00</span>
-            <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">同步额度</a>
+          <div class="sync-countdown" aria-label="下次同步">
+            <span>下次同步</span>
+            <strong class="refresh-countdown" data-refresh-countdown>03:00</strong>
           </div>
+          <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">同步额度</a>
         </section>
 
         <section class="dashboard-card">
@@ -58,7 +60,7 @@
             </div>
           {% endif %}
 
-          <div class="support-row">
+          <div class="support-row" hidden>
             <p
               class="updated-at"
               data-updated-node
@@ -87,40 +89,31 @@
           {% if dashboard.metrics %}
             <div class="metric-list" data-metric-list>
               {% for metric in dashboard.metrics %}
-                <article class="metric-card" data-metric-card="{{ metric.metric_type }}">
+                {% set remaining = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
+                {% set metric_angle = remaining * 3.6 %}
+                <article
+                  class="metric-card metric-{{ metric.metric_type }}"
+                  data-metric-card="{{ metric.metric_type }}"
+                  style="--remaining-pct: {{ remaining }}%; --remaining-deg: {{ metric_angle }}deg;"
+                >
                   <div class="metric-head">
                     <div>
-                      <p class="metric-title">{{ metric.label }}</p>
-                      <p class="metric-subtitle">Remaining usage window</p>
+                      <h2 class="metric-title" data-metric-title>{{ metric.label }}</h2>
                     </div>
-                    {% if metric.remaining_pct is not none %}
-                      {% if metric.remaining_pct > 75 %}
-                        {% set metric_tier = "tier-75-plus" %}
-                      {% elif metric.remaining_pct > 50 %}
-                        {% set metric_tier = "tier-50-75" %}
-                      {% elif metric.remaining_pct > 25 %}
-                        {% set metric_tier = "tier-25-50" %}
-                      {% else %}
-                        {% set metric_tier = "tier-25-below" %}
-                      {% endif %}
-                    {% else %}
-                      {% set metric_tier = "tier-unknown" %}
-                    {% endif %}
-                    <p class="metric-value {{ metric_tier }}" data-metric-value>
-                      {% if metric.remaining_pct is not none %}
-                        <span class="metric-percent" data-metric-percent>{{ metric.remaining_pct }}%</span>
-                        <span class="metric-suffix">left</span>
-                      {% else %}
-                        --
-                      {% endif %}
-                    </p>
                   </div>
-                  <div class="progress-track">
-                    {% set width = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
-                    <div class="progress-fill {{ metric_tier }}" data-progress-fill style="width: {{ width }}%"></div>
+                  <div class="radial-wrap">
+                    <div class="metric-radial" data-metric-radial>
+                      <div class="metric-radial-inner">
+                        {% if metric.remaining_pct is not none %}
+                          <strong data-metric-percent>{{ metric.remaining_pct }}%</strong>
+                        {% else %}
+                          <strong data-metric-percent>--</strong>
+                        {% endif %}
+                        <span>剩余额度</span>
+                      </div>
+                    </div>
                   </div>
-                  <div class="metric-row muted">
-                    <span>Remaining</span>
+                  <div class="quota-footer">
                     <span
                       class="reset-copy"
                       data-reset-copy
@@ -129,23 +122,13 @@
                       {% endif %}
                     >
                       {% if metric.reset_at %}
-                        Resets soon
+                        重置剩余计算中
                       {% else %}
-                        Reset time unavailable
+                        重置剩余未知
                       {% endif %}
                     </span>
                   </div>
                 </article>
-              {% endfor %}
-            </div>
-          {% endif %}
-
-          {% if dashboard.detail_links %}
-            <div class="detail-links">
-              {% for link in dashboard.detail_links %}
-                <a class="detail-link" href="{{ link.url }}" target="_blank" rel="noreferrer">
-                  {{ link.label }}
-                </a>
               {% endfor %}
             </div>
           {% endif %}

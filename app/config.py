@@ -32,6 +32,11 @@ class Settings:
     playwright_headless: bool
     scrape_timeout_ms: int
     mock_scraper_enabled: bool
+    codex_auth_paths: list[Path]
+    codex_oauth_usage_url: str
+    codex_cli_bin: str
+    codex_cli_timeout_seconds: float
+    local_snapshot_connector_enabled: bool
 
     def ensure_directories(self) -> None:
         for directory in (
@@ -53,6 +58,12 @@ def get_settings() -> Settings:
     runtime_dir = app_data_dir / "runtime"
     templates_dir = project_root / "app" / "templates"
     static_dir = project_root / "app" / "static"
+
+    codex_auth_paths: list[Path] = []
+    codex_home = os.getenv("CODEX_HOME")
+    if codex_home:
+        codex_auth_paths.append(Path(codex_home).expanduser() / "auth.json")
+    codex_auth_paths.append(Path.home() / ".codex" / "auth.json")
 
     settings = Settings(
         project_root=project_root,
@@ -84,6 +95,18 @@ def get_settings() -> Settings:
         in {"1", "true", "yes"},
         scrape_timeout_ms=int(os.getenv("TOKEN_BI_SCRAPE_TIMEOUT_MS", "15000")),
         mock_scraper_enabled=os.getenv("TOKEN_BI_USE_MOCK_SCRAPER", "false").lower()
+        in {"1", "true", "yes"},
+        codex_auth_paths=codex_auth_paths,
+        codex_oauth_usage_url=os.getenv(
+            "TOKEN_BI_CODEX_OAUTH_USAGE_URL",
+            "https://chatgpt.com/backend-api/wham/usage",
+        ),
+        codex_cli_bin=os.getenv("TOKEN_BI_CODEX_CLI_BIN", "codex"),
+        codex_cli_timeout_seconds=float(os.getenv("TOKEN_BI_CODEX_CLI_TIMEOUT_SECONDS", "8")),
+        local_snapshot_connector_enabled=os.getenv(
+            "TOKEN_BI_ENABLE_LOCAL_SNAPSHOT_CONNECTOR",
+            "false",
+        ).lower()
         in {"1", "true", "yes"},
     )
     settings.ensure_directories()

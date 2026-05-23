@@ -328,37 +328,60 @@ class ScraperService:
         if isinstance(wham_rate_limit, dict):
             primary = wham_rate_limit.get("primary_window") or {}
             secondary = wham_rate_limit.get("secondary_window") or {}
-            if (
-                "used_percent" in primary
-                and "reset_at" in primary
-                and "used_percent" in secondary
-                and "reset_at" in secondary
-            ):
-                return {
-                    "session_remaining_pct": max(0, 100 - int(primary["used_percent"])),
-                    "session_reset_at": self._coerce_datetime(primary["reset_at"]),
-                    "weekly_remaining_pct": max(0, 100 - int(secondary["used_percent"])),
-                    "weekly_reset_at": self._coerce_datetime(secondary["reset_at"]),
-                    "updated_at": datetime.now().astimezone(),
-                    "is_estimated": False,
-                }
+            usage_payload: dict[str, Any] = {
+                "updated_at": datetime.now().astimezone(),
+                "is_estimated": False,
+            }
+            if "used_percent" in primary and "reset_at" in primary:
+                metric_type = self._legacy_metric_type_for_window(primary, default="session")
+                usage_payload[f"{metric_type}_remaining_pct"] = max(0, 100 - int(primary["used_percent"]))
+                usage_payload[f"{metric_type}_reset_at"] = self._coerce_datetime(primary["reset_at"])
+            if "used_percent" in secondary and "reset_at" in secondary:
+                metric_type = self._legacy_metric_type_for_window(secondary, default="weekly")
+                usage_payload[f"{metric_type}_remaining_pct"] = max(0, 100 - int(secondary["used_percent"]))
+                usage_payload[f"{metric_type}_reset_at"] = self._coerce_datetime(secondary["reset_at"])
+            if self._has_any_usage_metric(usage_payload):
+                return usage_payload
 
-        required = {
-            "session_remaining_pct",
-            "session_reset_at",
-            "weekly_remaining_pct",
-            "weekly_reset_at",
-        }
-        if not required.issubset(payload.keys()):
+        normalized = self._normalize_usage_payload(payload)
+        if normalized is None:
             return None
-        return {
-            "session_remaining_pct": int(payload["session_remaining_pct"]),
-            "session_reset_at": self._coerce_datetime(payload["session_reset_at"]),
-            "weekly_remaining_pct": int(payload["weekly_remaining_pct"]),
-            "weekly_reset_at": self._coerce_datetime(payload["weekly_reset_at"]),
+        return normalized
+
+    def _normalize_usage_payload(self, payload: dict) -> Optional[dict]:
+        normalized: dict[str, Any] = {
             "updated_at": self._coerce_datetime(payload.get("updated_at")) or datetime.now().astimezone(),
             "is_estimated": bool(payload.get("is_estimated", False)),
         }
+        for metric_type in ("session", "weekly"):
+            remaining_key = f"{metric_type}_remaining_pct"
+            reset_key = f"{metric_type}_reset_at"
+            if remaining_key in payload and reset_key in payload:
+                normalized[remaining_key] = int(payload[remaining_key])
+                normalized[reset_key] = self._coerce_datetime(payload[reset_key])
+
+        if not self._has_any_usage_metric(normalized):
+            return None
+        return normalized
+
+    def _legacy_metric_type_for_window(self, window: dict, default: str) -> str:
+        duration_seconds = window.get("limit_window_seconds") or window.get("window_seconds")
+        duration_minutes = window.get("windowDurationMins") or window.get("window_minutes")
+        if duration_minutes is None and duration_seconds is not None:
+            duration_minutes = int(duration_seconds) / 60
+        if duration_minutes is None:
+            return default
+        if duration_minutes >= 10080:
+            return "weekly"
+        if duration_minutes <= 300:
+            return "session"
+        return default
+
+    def _has_any_usage_metric(self, payload: dict) -> bool:
+        return any(
+            f"{metric_type}_remaining_pct" in payload and f"{metric_type}_reset_at" in payload
+            for metric_type in ("session", "weekly")
+        )
 
     def _extract_usage_from_text(self, body_text: str) -> Optional[dict]:
         if not body_text:
@@ -366,20 +389,24 @@ class ScraperService:
 
         session = self._extract_metric_from_text(body_text, "Session")
         weekly = self._extract_metric_from_text(body_text, "Weekly")
-        if session is None or weekly is None:
+        if session is None:
             session = self._extract_metric_from_chinese_text(body_text, "session")
+        if weekly is None:
             weekly = self._extract_metric_from_chinese_text(body_text, "weekly")
-        if session is None or weekly is None:
+        if session is None and weekly is None:
             return None
 
-        return {
-            "session_remaining_pct": session["remaining_pct"],
-            "session_reset_at": session["reset_at"],
-            "weekly_remaining_pct": weekly["remaining_pct"],
-            "weekly_reset_at": weekly["reset_at"],
+        payload: dict[str, Any] = {
             "updated_at": datetime.now().astimezone(),
             "is_estimated": False,
         }
+        if session is not None:
+            payload["session_remaining_pct"] = session["remaining_pct"]
+            payload["session_reset_at"] = session["reset_at"]
+        if weekly is not None:
+            payload["weekly_remaining_pct"] = weekly["remaining_pct"]
+            payload["weekly_reset_at"] = weekly["reset_at"]
+        return payload
 
     def _extract_metric_from_text(self, text: str, label: str) -> Optional[dict]:
         patterns = [

@@ -15,6 +15,8 @@ class PageState(str, Enum):
     STALE = "stale"
     ERROR = "error"
     REAUTH_REQUIRED = "reauth_required"
+    RATE_LIMITED = "rate_limited"
+    SOURCE_CHANGED = "source_changed"
 
 
 class MetricCard(BaseModel):
@@ -22,6 +24,10 @@ class MetricCard(BaseModel):
     label: str
     remaining_pct: Optional[int] = None
     reset_at: Optional[datetime] = None
+    window_seconds: Optional[int] = None
+    window_minutes: Optional[int] = None
+    source_type: str = "unknown"
+    source_detail: str = "unknown"
 
 
 class DetailLink(BaseModel):

@@ -2,6 +2,52 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## v1.0.0 - 技术设计收敛与主链路改造
+
+日期：2026-05-23
+
+设计：
+
+- 新增 [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)，作为 v1.0.0 后续开发技术蓝图。
+- 数据源主链路从 Chrome/CDP 抓取调整为 Codex OAuth / Codex CLI RPC 优先，Web Session 兜底。
+- 看板展示从固定 `session_*` / `weekly_*` 调整为官方 usage / rate limit 窗口透传。
+- 明确敏感数据与日志边界：不落库 usage 历史，不写入 token、cookie、账号明文或官方原始响应。
+- 补充本地验证计划和迁移策略：无历史 usage 迁移，直接替换刷新主链路。
+
+实现进展：
+
+- 新增 `CodexOAuthConnector` 与 `CodexCliRpcConnector`，并将默认 connector 顺序调整为 OAuth、CLI RPC、Web Session；本地 snapshot connector 仅作为测试/开发开关使用。
+- `CodexCliRpcConnector` 默认通过 `codex app-server --listen stdio://` 完成 `initialize` 后读取 `account/read` 与 `account/rateLimits/read`，避免依赖当前本机缺失的 managed daemon/proxy 安装形态。
+- 后端新增官方 usage / rate limit 窗口归一化层，`DashboardPayload.metrics[]` 改为动态窗口列表，不再依赖固定 `session` / `weekly` 业务枚举。
+- 看板前端支持成功恢复后动态创建指标卡，未知窗口兜底文案改为中性的 `Usage window`。
+- 主服务启动阶段不再默认拉起 Chrome worker，只尝试恢复已有 worker；Web Session 仅在 fallback/login 路径使用。
+- 诊断接口补充 OAuth、CLI RPC、Web Session 与最近 connector 降级状态。
+- 控制台账号卡新增数据源链路状态，“刷新状态”反馈会展示本次成功使用的数据源与 connector。
+- BI 看板端落地夜间模式圆环卡片：顶部保留账号、数据源、下次同步和 `同步额度`，卡片中心唯一展示剩余额度百分比，底部只展示重置剩余时间。
+- BI 看板只展示已识别的 `5h 额度` 与 `周额度`；未知窗口、链路、日志、运维状态和多余辅助标签不进入看板。
+- 补充 [docs/DASHBOARD_UI_OPTIMIZATION_V1.0.0_NOTES.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/DASHBOARD_UI_OPTIMIZATION_V1.0.0_NOTES.md)，记录本轮 UI 决策、技术变更和验证证据。
+
+发布验证：
+
+- `.venv/bin/python -m pytest -q`：89 passed。
+- `npm run app:build`：通过，生成 `Token BI_1.0.0_aarch64.dmg`。
+- 打包 sidecar 冒烟验证 `/dashboard` 返回 200，并确认新圆环看板、`同步额度`、无进度条、无“官方额度窗口”、无未知窗口展示。
+
+已知限制：
+
+- 当前 DMG 未进行 Apple Developer ID 签名与 notarization，首次安装仍可能出现 macOS Gatekeeper 提示。
+
+## Unreleased - Codex analytics 周额度单卡兼容
+
+日期：2026-04-29
+
+修复：
+
+- Codex 官方 analytics 页面删除 `5h` / `5 小时额度` 后，抓取器不再把缺少 session quota 视为页面结构整体失效。
+- `Web Session Connector`、DOM fallback、`/backend-api/wham/usage` JSON 解析和本地 snapshot connector 均支持只返回 `weekly_*` 字段。
+- 看板会根据实际返回的指标动态渲染额度卡；当只有周额度时，只显示 `Weekly` / `周额度` 卡片，不再渲染空的 `5h Session` 卡片。
+- 当前页面若已处于 `connector_error` 错误态，下一次 `同步额度` 成功后可动态创建额度卡并恢复显示，无需整页刷新。
+
 ## v0.9.1 - 跨设备看板与控制台体验修复
 
 日期：2026-04-26

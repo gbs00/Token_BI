@@ -7,6 +7,8 @@ from app.services.cache_service import CacheService
 from app.services.scraper_service import ScraperService
 from app.services.session_service import SessionService
 from app.services.usage_connectors import (
+    CodexCliRpcConnector,
+    CodexOAuthConnector,
     LocalCodexConnector,
     UsageConnectorManager,
     WebSessionConnector,
@@ -22,12 +24,21 @@ class ServiceContainer:
         self.session_service = SessionService(settings)
         self.scraper_service = ScraperService(settings)
         self.browser_worker_service = BrowserWorkerService(settings, self.scraper_service)
-        self.usage_connector_manager = UsageConnectorManager(
-            connectors=[
-                LocalCodexConnector(settings.runtime_local_connector_dir),
-                WebSessionConnector(self.browser_worker_service),
-            ]
-        )
+        usage_connectors = [
+            CodexOAuthConnector(
+                auth_paths=settings.codex_auth_paths,
+                usage_url=settings.codex_oauth_usage_url,
+                timeout_seconds=settings.codex_cli_timeout_seconds,
+            ),
+            CodexCliRpcConnector(
+                codex_bin=settings.codex_cli_bin,
+                timeout_seconds=settings.codex_cli_timeout_seconds,
+            ),
+        ]
+        if settings.local_snapshot_connector_enabled:
+            usage_connectors.append(LocalCodexConnector(settings.runtime_local_connector_dir))
+        usage_connectors.append(WebSessionConnector(self.browser_worker_service))
+        self.usage_connector_manager = UsageConnectorManager(connectors=usage_connectors)
         self.usage_service = UsageService(
             account_service=self.account_service,
             cache_service=self.cache_service,
@@ -40,10 +51,7 @@ class ServiceContainer:
             if account.status.value != "active":
                 continue
             try:
-                self.browser_worker_service.ensure_worker_for_account(
-                    account,
-                    target_url=self.settings.analytics_url,
-                )
+                self.browser_worker_service.restore_session_snapshot(account)
             except Exception:
                 continue
 

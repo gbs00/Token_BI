@@ -44,6 +44,27 @@ def test_scraper_parses_usage_from_body_text(test_settings) -> None:
     assert isinstance(payload["weekly_reset_at"], datetime)
 
 
+def test_scraper_parses_weekly_only_body_text_when_session_quota_removed(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+    payload = scraper._parse_artifacts(
+        {
+            "title": "Codex Usage",
+            "bodyText": """
+            Codex 分析
+            Weekly 89% left Resets in 5d 7h
+            """,
+            "networkJsonTexts": [],
+            "directUsageJsonTexts": [],
+            "scriptJsonTexts": [],
+        }
+    )
+
+    assert "session_remaining_pct" not in payload
+    assert payload["weekly_remaining_pct"] == 89
+    assert payload["source_detail"] == "dom_fallback"
+    assert isinstance(payload["weekly_reset_at"], datetime)
+
+
 def test_scraper_prefers_network_json_over_script_and_dom(test_settings) -> None:
     scraper = ScraperService(test_settings)
     payload = scraper._parse_artifacts(
@@ -150,6 +171,66 @@ def test_scraper_parses_usage_from_direct_wham_payload(test_settings) -> None:
     assert isinstance(payload["weekly_reset_at"], datetime)
 
 
+def test_scraper_parses_weekly_only_direct_wham_payload(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+    payload = scraper._parse_artifacts(
+        {
+            "title": "Codex",
+            "bodyText": "中文界面",
+            "networkJsonTexts": [],
+            "directUsageJsonTexts": [
+                """
+                {
+                  "rate_limit": {
+                    "secondary_window": {
+                      "used_percent": 11,
+                      "reset_at": 1777430464
+                    }
+                  }
+                }
+                """
+            ],
+            "scriptJsonTexts": [],
+        }
+    )
+
+    assert "session_remaining_pct" not in payload
+    assert payload["weekly_remaining_pct"] == 89
+    assert payload["source_detail"] == "direct_usage_fetch"
+    assert isinstance(payload["weekly_reset_at"], datetime)
+
+
+def test_scraper_treats_single_weekly_wham_primary_window_as_weekly(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+    payload = scraper._parse_artifacts(
+        {
+            "title": "Codex",
+            "bodyText": "中文界面",
+            "networkJsonTexts": [
+                """
+                {
+                  "rate_limit": {
+                    "primary_window": {
+                      "used_percent": 11,
+                      "reset_at": 1777430464,
+                      "limit_window_seconds": 604800
+                    },
+                    "secondary_window": null
+                  }
+                }
+                """
+            ],
+            "directUsageJsonTexts": [],
+            "scriptJsonTexts": [],
+        }
+    )
+
+    assert "session_remaining_pct" not in payload
+    assert payload["weekly_remaining_pct"] == 89
+    assert payload["source_detail"] == "network_response"
+    assert isinstance(payload["weekly_reset_at"], datetime)
+
+
 def test_scraper_extracts_masked_account_identity_from_json(test_settings) -> None:
     scraper = ScraperService(test_settings)
     payload = scraper._parse_artifacts(
@@ -212,6 +293,27 @@ def test_scraper_parses_usage_from_chinese_dom_text(test_settings) -> None:
     assert payload["weekly_remaining_pct"] == 99
     assert payload["source_detail"] == "dom_fallback"
     assert isinstance(payload["session_reset_at"], datetime)
+    assert isinstance(payload["weekly_reset_at"], datetime)
+
+
+def test_scraper_parses_weekly_only_chinese_dom_text(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+    payload = scraper._parse_artifacts(
+        {
+            "title": "Codex",
+            "bodyText": """
+            Codex 分析
+            每周使用限额 89% 剩余 重置时间：2026年4月30日 10:41
+            """,
+            "networkJsonTexts": [],
+            "directUsageJsonTexts": [],
+            "scriptJsonTexts": [],
+        }
+    )
+
+    assert "session_remaining_pct" not in payload
+    assert payload["weekly_remaining_pct"] == 89
+    assert payload["source_detail"] == "dom_fallback"
     assert isinstance(payload["weekly_reset_at"], datetime)
 
 
