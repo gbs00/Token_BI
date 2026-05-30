@@ -1,6 +1,7 @@
 (function () {
   var refreshIntervalMs = 180000;
   var retryIntervalMs = 15000;
+  var ringCircumference = 263.89378290154264;
   var timerId = null;
   var countdownTimerId = null;
 
@@ -135,6 +136,22 @@
     return Math.max(0, Math.min(100, remaining));
   }
 
+  function getTierClass(remaining) {
+    if (remaining === null || remaining === undefined || Number.isNaN(remaining)) {
+      return "tier-unknown";
+    }
+    if (remaining > 75) {
+      return "tier-75-plus";
+    }
+    if (remaining > 50) {
+      return "tier-50-75";
+    }
+    if (remaining > 25) {
+      return "tier-25-50";
+    }
+    return "tier-25-below";
+  }
+
   function setMessageBanner(message) {
     var banner = document.querySelector("[data-message-banner]");
     if (!message) {
@@ -181,7 +198,7 @@
     }
 
     var card = document.createElement("article");
-    card.className = "metric-card metric-" + metric.metric_type;
+    card.className = "metric-card metric-" + metric.metric_type + " tier-unknown";
     card.setAttribute("data-metric-card", metric.metric_type);
     card.innerHTML =
       '<div class="metric-head">' +
@@ -191,6 +208,10 @@
       '</div>' +
       '<div class="radial-wrap">' +
         '<div class="metric-radial" data-metric-radial>' +
+          '<svg class="metric-radial-svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">' +
+            '<circle class="metric-ring-track" cx="50" cy="50" r="42"></circle>' +
+            '<circle class="metric-ring-value" data-metric-ring-value cx="50" cy="50" r="42" stroke-dasharray="' + ringCircumference + '" stroke-dashoffset="' + ringCircumference + '"></circle>' +
+          '</svg>' +
           '<div class="metric-radial-inner">' +
             '<strong data-metric-percent>--</strong>' +
             '<span>剩余额度</span>' +
@@ -247,14 +268,18 @@
 
     var titleNode = card.querySelector("[data-metric-title]");
     var radialNode = card.querySelector("[data-metric-radial]");
+    var ringNode = card.querySelector("[data-metric-ring-value]");
     var percentNode = card.querySelector("[data-metric-percent]");
     var resetNode = card.querySelector("[data-reset-copy]");
     var remaining = remainingValue(normalized);
+    var safeRemaining = remaining === null ? 0 : remaining;
+    var ringOffset = ringCircumference * (100 - safeRemaining) / 100;
 
-    card.className = "metric-card metric-" + normalized.metric_type;
+    card.className = "metric-card metric-" + normalized.metric_type + " " + getTierClass(remaining);
     card.setAttribute("data-metric-card", normalized.metric_type);
-    card.style.setProperty("--remaining-pct", (remaining === null ? 0 : remaining) + "%");
-    card.style.setProperty("--remaining-deg", (remaining === null ? 0 : remaining * 3.6) + "deg");
+    card.style.setProperty("--remaining-pct", safeRemaining + "%");
+    card.style.setProperty("--remaining-deg", (safeRemaining * 3.6) + "deg");
+    card.style.setProperty("--remaining-offset", String(ringOffset));
 
     if (titleNode) {
       titleNode.textContent = normalized.label;
@@ -262,6 +287,11 @@
 
     if (radialNode) {
       radialNode.setAttribute("aria-label", normalized.label + "剩余 " + (remaining === null ? "未知" : remaining + "%"));
+    }
+
+    if (ringNode) {
+      ringNode.setAttribute("stroke-dasharray", String(ringCircumference));
+      ringNode.setAttribute("stroke-dashoffset", String(ringOffset));
     }
 
     if (percentNode) {

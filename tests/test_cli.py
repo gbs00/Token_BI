@@ -8,7 +8,7 @@ from scripts import control_panel
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "1.0.0"
+EXPECTED_VERSION = "1.0.2"
 
 
 def test_cli_has_control_panel_command():
@@ -38,7 +38,7 @@ def test_control_panel_backend_command_uses_executable_when_frozen(monkeypatch):
     assert control_panel._backend_command(["health"]) == ["/tmp/token-bi-backend", "health"]
 
 
-def test_release_version_metadata_matches_v1() -> None:
+def test_release_version_metadata_matches_v102() -> None:
     package_json = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     tauri_config = json.loads(
@@ -50,5 +50,5 @@ def test_release_version_metadata_matches_v1() -> None:
     assert package_lock["version"] == EXPECTED_VERSION
     assert package_lock["packages"][""]["version"] == EXPECTED_VERSION
     assert tauri_config["version"] == EXPECTED_VERSION
-    assert re.search(r'^version = "1\.0\.0"$', cargo_toml, flags=re.MULTILINE)
+    assert re.search(r'^version = "1\.0\.2"$', cargo_toml, flags=re.MULTILINE)
     assert create_app().version == EXPECTED_VERSION

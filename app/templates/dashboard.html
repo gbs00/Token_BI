@@ -10,7 +10,7 @@
     <meta name="theme-color" content="#0c111b" />
     <link rel="manifest" href="{{ url_for('static', path='site.webmanifest') }}" />
     <title>Token BI</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260426-ios-safari-fallback" />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260524-svg-circumference-fix" />
   </head>
   <body data-dashboard-account-id="{{ selected_account_id or '' }}">
     <main class="app-shell">
@@ -90,11 +90,24 @@
             <div class="metric-list" data-metric-list>
               {% for metric in dashboard.metrics %}
                 {% set remaining = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
+                {% set ring_circumference = 263.89378290154264 %}
                 {% set metric_angle = remaining * 3.6 %}
+                {% set metric_offset = ring_circumference * (100 - remaining) / 100 %}
+                {% if metric.remaining_pct is none %}
+                  {% set metric_tier = 'tier-unknown' %}
+                {% elif remaining > 75 %}
+                  {% set metric_tier = 'tier-75-plus' %}
+                {% elif remaining > 50 %}
+                  {% set metric_tier = 'tier-50-75' %}
+                {% elif remaining > 25 %}
+                  {% set metric_tier = 'tier-25-50' %}
+                {% else %}
+                  {% set metric_tier = 'tier-25-below' %}
+                {% endif %}
                 <article
-                  class="metric-card metric-{{ metric.metric_type }}"
+                  class="metric-card metric-{{ metric.metric_type }} {{ metric_tier }}"
                   data-metric-card="{{ metric.metric_type }}"
-                  style="--remaining-pct: {{ remaining }}%; --remaining-deg: {{ metric_angle }}deg;"
+                  style="--remaining-pct: {{ remaining }}%; --remaining-deg: {{ metric_angle }}deg; --remaining-offset: {{ metric_offset }};"
                 >
                   <div class="metric-head">
                     <div>
@@ -103,6 +116,18 @@
                   </div>
                   <div class="radial-wrap">
                     <div class="metric-radial" data-metric-radial>
+                      <svg class="metric-radial-svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                        <circle class="metric-ring-track" cx="50" cy="50" r="42" />
+                        <circle
+                          class="metric-ring-value"
+                          data-metric-ring-value
+                          cx="50"
+                          cy="50"
+                          r="42"
+                          stroke-dasharray="{{ ring_circumference }}"
+                          stroke-dashoffset="{{ metric_offset }}"
+                        />
+                      </svg>
                       <div class="metric-radial-inner">
                         {% if metric.remaining_pct is not none %}
                           <strong data-metric-percent>{{ metric.remaining_pct }}%</strong>
@@ -136,6 +161,6 @@
       </section>
     </main>
 
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260426-ios-safari-fallback"></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260524-svg-circumference-fix"></script>
   </body>
 </html>

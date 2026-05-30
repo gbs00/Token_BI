@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Token BI v1.0.2 控制台设计预览</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0e14;
+        --surface: #111821;
+        --surface-2: #151d28;
+        --surface-3: #0d131b;
+        --line: #2a3544;
+        --line-soft: rgba(165, 190, 230, 0.12);
+        --text: #f1f6ff;
+        --muted: #97a6bb;
+        --soft: #cbd6e6;
+        --blue: #2f7df4;
+        --blue-2: #5ca0ff;
+        --green: #42d87c;
+        --amber: #f4c95d;
+        --red: #ff6b6b;
+        --cyan: #35d4ee;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 12% 0%, rgba(47, 125, 244, 0.18), transparent 28%),
+          linear-gradient(180deg, #091019 0%, #0b0e13 100%);
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .app {
+        width: min(1120px, 100%);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 14px;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: center;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(17, 24, 33, 0.94);
+        box-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .mark {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #36506b;
+        border-radius: 8px;
+        color: var(--cyan);
+        background: #101a25;
+        font-weight: 900;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 5px;
+        font-size: clamp(24px, 3vw, 34px);
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-line {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        padding: 0 12px;
+        border: 1px solid rgba(66, 216, 124, 0.3);
+        border-radius: 8px;
+        color: #dfffe9;
+        background: rgba(66, 216, 124, 0.09);
+        font-weight: 800;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 0 4px rgba(66, 216, 124, 0.14);
+      }
+
+      .primary {
+        min-width: 146px;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid #65a4ff;
+        border-radius: 8px;
+        color: #ffffff;
+        background: linear-gradient(180deg, var(--blue-2) 0%, var(--blue) 100%);
+        box-shadow: 0 10px 24px rgba(47, 125, 244, 0.28);
+        font-weight: 900;
+      }
+
+      .primary svg,
+      .ghost svg {
+        width: 17px;
+        height: 17px;
+        stroke: currentColor;
+        stroke-width: 2.2;
+        fill: none;
+      }
+
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric,
+      .panel,
+      .action-panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+
+      .metric {
+        min-height: 98px;
+        padding: 15px;
+      }
+
+      .account-metric {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+      }
+
+      .metric span {
+        display: block;
+        margin-bottom: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        overflow: hidden;
+        color: var(--text);
+        font-size: clamp(18px, 2.5vw, 26px);
+        line-height: 1.1;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .metric small {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .metric-action {
+        min-width: 76px;
+        height: 30px;
+        border: 1px solid #344050;
+        border-radius: 8px;
+        color: var(--soft);
+        background: #101721;
+        font-weight: 800;
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(360px, 1.04fr) minmax(300px, 0.96fr);
+        gap: 14px;
+      }
+
+      .action-panel {
+        padding: 18px;
+        display: grid;
+        align-content: start;
+        gap: 18px;
+      }
+
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+
+      .section-head h2 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
+
+      .section-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .operation {
+        padding: 16px;
+        border: 1px solid rgba(47, 125, 244, 0.32);
+        border-radius: 8px;
+        background: linear-gradient(180deg, rgba(47, 125, 244, 0.14), rgba(20, 28, 40, 0.85));
+      }
+
+      .operation h3 {
+        margin: 0 0 6px;
+        font-size: 17px;
+      }
+
+      .operation p {
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .secondary-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .ghost {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 10px;
+        border: 1px solid #344050;
+        border-radius: 8px;
+        color: var(--soft);
+        background: #111820;
+        font-weight: 750;
+      }
+
+      .ghost.connect {
+        color: #dffaff;
+        border-color: rgba(53, 212, 238, 0.42);
+        background: rgba(53, 212, 238, 0.08);
+      }
+
+      .ghost.danger {
+        min-width: 128px;
+        height: 40px;
+        justify-content: center;
+        color: #ffdede;
+        border-color: rgba(255, 107, 107, 0.38);
+        background: rgba(255, 107, 107, 0.08);
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        min-height: 52px;
+        padding: 11px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        background: var(--surface-2);
+      }
+
+      .row b {
+        display: block;
+        margin-bottom: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .row span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .row code {
+        color: var(--soft);
+        font-family: inherit;
+        font-size: 12px;
+      }
+
+      .row.warn .dot {
+        background: var(--amber);
+        box-shadow: 0 0 0 4px rgba(244, 201, 93, 0.14);
+      }
+
+      .row.idle .dot {
+        background: #728096;
+        box-shadow: 0 0 0 4px rgba(114, 128, 150, 0.14);
+      }
+
+      .bottom {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.48fr);
+        gap: 14px;
+      }
+
+      .url-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .url-item {
+        display: grid;
+        grid-template-columns: 84px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .url-item:last-child {
+        border-bottom: 0;
+      }
+
+      .url-item span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .url-item code {
+        overflow: hidden;
+        color: var(--soft);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-family: inherit;
+        font-size: 13px;
+      }
+
+      .log {
+        height: 138px;
+        overflow: hidden;
+        padding: 12px;
+        border: 1px solid var(--line-soft);
+        border-radius: 8px;
+        color: #9fb0c8;
+        background: #080d12;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+
+      @media (max-width: 860px) {
+        .app {
+          padding: 16px;
+        }
+
+        .topbar,
+        .main-grid,
+        .bottom {
+          grid-template-columns: 1fr;
+        }
+
+        .status-line {
+          justify-content: flex-start;
+        }
+
+        .summary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 560px) {
+        .app {
+          padding: 12px;
+        }
+
+        .summary {
+          grid-template-columns: 1fr;
+        }
+
+        .row,
+        .url-item {
+          grid-template-columns: 1fr;
+        }
+
+        .primary {
+          width: 100%;
+        }
+
+        .account-metric {
+          grid-template-columns: 1fr;
+        }
+
+        .metric-action {
+          justify-self: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark">TB</div>
+          <div>
+            <h1>Token BI 控制台</h1>
+            <p class="subtitle">本机服务和副屏看板入口保持在同一个工作台。</p>
+          </div>
+        </div>
+        <div class="status-line">
+          <span class="status-pill"><i class="dot"></i>服务运行中</span>
+          <button class="ghost danger">
+            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
+            关闭服务
+          </button>
+        </div>
+      </header>
+
+      <section class="summary">
+        <article class="metric account-metric">
+          <div>
+            <span>当前账号</span>
+            <strong id="accountValue">guob****@gmail.com</strong>
+            <small id="accountStatus">active</small>
+          </div>
+          <button id="accountActionPreview" class="metric-action">退出账号</button>
+        </article>
+        <article class="metric">
+          <span>数据源</span>
+          <strong id="dataSourceValue">OAuth</strong>
+          <small id="dataSourceStatus">usage api 可用</small>
+        </article>
+        <article class="metric">
+          <span>看板入口</span>
+          <strong>8787</strong>
+          <small>局域网已就绪</small>
+        </article>
+        <article class="metric">
+          <span>最近同步</span>
+          <strong>刚刚</strong>
+          <small>官方额度已刷新</small>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <article class="action-panel">
+          <div class="section-head">
+            <div>
+              <h2>快捷操作</h2>
+            </div>
+          </div>
+          <div class="operation">
+            <div>
+              <h3 id="operationTitle">打开副屏看板</h3>
+              <button class="primary">
+                <svg viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8" /></svg>
+                <span id="primaryActionLabel">打开看板</span>
+              </button>
+            </div>
+          </div>
+          <div class="secondary-actions">
+            <button class="ghost connect">
+              <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v6h-6v-2h4zM14 18h2v2h-2z" /></svg>
+              扫码连接副屏
+            </button>
+            <button class="ghost">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" /></svg>
+              刷新状态
+            </button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <h2>服务状态</h2>
+              <p>运维信息保留，但视觉上低于主操作。</p>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="row">
+              <i class="dot"></i>
+              <div><b>控制台 sidecar</b><span>127.0.0.1:8790 · healthy</span></div>
+              <code>运行中</code>
+            </div>
+            <div class="row">
+              <i class="dot"></i>
+              <div><b>主服务</b><span>0.0.0.0:8787 · dashboard ready</span></div>
+              <code>运行中</code>
+            </div>
+            <div class="row warn">
+              <i class="dot"></i>
+              <div><b>登录窗口</b><span>仅登录时拉起，用完自动弱化</span></div>
+              <code>待命</code>
+            </div>
+            <div class="row idle">
+              <i class="dot"></i>
+              <div><b>运行日志</b><span>异常时提升为可见入口</span></div>
+              <code>3 行</code>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="bottom">
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <h2>副屏入口</h2>
+              <p>保留本机、固定主机名和局域网地址，便于不同设备打开。</p>
+            </div>
+          </div>
+          <div class="url-list">
+            <div class="url-item"><span>本机</span><code>http://127.0.0.1:8787/dashboard</code><button class="ghost">打开</button></div>
+            <div class="url-item"><span>固定地址</span><code>http://gbs00macbook-air-m2.local:8787/dashboard</code><button class="ghost">复制</button></div>
+            <div class="url-item"><span>局域网</span><code>http://192.168.31.19:8787/dashboard</code><button class="ghost">二维码</button></div>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="section-head">
+            <div>
+              <h2>最近日志</h2>
+              <p>默认只展示摘要。</p>
+            </div>
+          </div>
+          <pre class="log">13:30 control health ok
+13:30 main service ready
+13:31 usage refreshed · OAuth</pre>
+        </article>
+      </section>
+    </main>
+    <script>
+      const previewState = new URLSearchParams(window.location.search).get("state");
+      if (previewState === "logged-out") {
+        document.getElementById("accountValue").textContent = "暂无账号";
+        document.getElementById("accountStatus").textContent = "需要登录";
+        document.getElementById("accountActionPreview").textContent = "登录账号";
+        document.getElementById("dataSourceValue").textContent = "等待登录";
+        document.getElementById("dataSourceStatus").textContent = "登录后读取 usage api";
+        document.getElementById("operationTitle").textContent = "登录账号";
+        document.getElementById("primaryActionLabel").textContent = "登录账号";
+      }
+    </script>
+  </body>
+</html>

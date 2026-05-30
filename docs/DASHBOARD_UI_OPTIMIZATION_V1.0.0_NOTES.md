@@ -46,16 +46,33 @@
 - 全局夜间模式，使用低亮度背景和高对比额度色。
 - 桌面和横屏短屏保持双卡同屏。
 - 窄屏和竖屏切换为同规格纵向卡片。
+- 额度颜色由 `remaining_pct` 阶梯决定，不由 `5h 额度` / `周额度` 类型决定：`>75%`、`>50 且 <=75%`、`>25 且 <=50%`、`<=25%`。
 - 使用 `100dvh`、`clamp()`、`min()` 和横屏断点降低多设备溢出风险。
+- 针对 iPhone 5s / 旧版 iOS Safari 增加固定尺寸 fallback：环形图不依赖 `aspect-ratio`，568×320 横屏下使用紧凑顶部栏与 120px SVG 圆环，避免页面溢出。
 
 ### 3.4 JS 动态刷新同步
 
 文件：`app/static/js/dashboard.js`
 
-- 动态创建卡片时使用与模板一致的圆环结构。
+- 动态创建卡片时使用与模板一致的 SVG 圆环结构。
 - 动态刷新时只保留可识别的 5h / 周额度指标。
 - `formatRelativeDuration()` 改为中文 `重置剩余 ...` 文案。
 - `同步额度` 仍然通过 `POST /api/v1/dashboard/refresh` 强制刷新。
+
+### 3.5 iPhone 5s Safari 实测修复
+
+输入来源：用户 2026-05-24 提供的 iPhone 5s Safari 横屏照片。
+
+- 问题 1：旧 Safari 对 CSS `aspect-ratio`、`min()` / `clamp()` 及 CSS 饼图组合支持不足，原 `metric-radial` 容器被压成椭圆。
+- 处理：改为 SVG `circle` + `stroke-dashoffset` 圆环，并保留固定宽高 fallback。
+- 问题 2：568×320 横屏下顶部栏和卡片尺寸偏大。
+- 处理：新增 `@media (orientation: landscape) and (max-height: 380px) and (max-width: 700px)`，压缩顶部栏、按钮、字号、卡片间距和圆环尺寸。
+- 问题 3：周额度卡曾通过 `.metric-weekly` 固定为黄色，导致 99% / 100% 周额度仍显示低额度警示色。
+- 处理：移除按指标类型固定颜色，服务端首屏与 JS 动态刷新均按 `remaining_pct` 写入 `tier-*` 档位类，圆环和中心百分比共用该档位色。
+- 问题 4：旧版 iOS Safari 对 SVG `pathLength` 的 stroke dash 归一化支持不可靠，导致 `92%` / `99%` 等高额度在 iPhone 5s 上显示为接近固定比例的短弧。
+- 处理：圆环不再依赖 `pathLength="100"`；统一使用 `r=42` 的真实圆周长 `263.89378290154264` 计算 `stroke-dasharray` 与 `stroke-dashoffset`，保证所有浏览器按同一比例渲染。
+- 问题 5：圆环和中心百分比在 iPhone 5s 横屏下视觉权重偏低，用户第一眼不容易聚焦额度本身。
+- 处理：按 `docs/design-previews/preview-d-emphasis-dashboard.html` 的“额度优先”方案放大圆环与中心百分比；短横屏下圆环提升到 `158px`，百分比提升到 `38px`，重置剩余时间保持当前比例与右下角样式。
 
 ## 4. 回归测试
 
@@ -66,8 +83,11 @@
 - 顶部同步按钮仍存在，且不回退到 `Refresh`。
 - 只输出 5h / 周额度，未知窗口不进入 API payload。
 - 服务端初始 HTML 与 JS 动态卡片均不包含外侧百分比或进度条。
-- CSS 存在圆环图和横竖屏响应式断点。
+- CSS 存在 SVG 圆环图、旧 Safari fallback 和横竖屏响应式断点。
+- SVG 圆环不包含 `pathLength`，`92%` / `99%` 的 dashoffset 按真实圆周长计算。
+- 99% 的 5h / 周额度均进入 `tier-75-plus`，不会因周额度类型被固定为黄色。
 - 周额度单卡场景仍可展示，不要求 5h 同时存在。
+- 568×320 横屏模拟验证：页面尺寸为 568×320，两个圆环均为 158×158，页面无滚动溢出。
 
 验证命令：
 

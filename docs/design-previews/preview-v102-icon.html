@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Token BI v1.0.2 Icon 设计预览</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #090d13;
+        --surface: #121923;
+        --surface-2: #0f151d;
+        --line: #2a3544;
+        --text: #f2f7ff;
+        --muted: #98a7ba;
+        --cyan: #38d7ee;
+        --blue: #2f7df4;
+        --green: #58df86;
+        --amber: #ffd166;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 0%, rgba(56, 215, 238, 0.16), transparent 24%),
+          linear-gradient(180deg, #090d13 0%, #0b1017 100%);
+      }
+
+      main {
+        width: min(1180px, 100%);
+        margin: 0 auto;
+        padding: 28px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 8px;
+        font-size: clamp(28px, 4vw, 42px);
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 760px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .card-head {
+        padding: 16px;
+        border-bottom: 1px solid rgba(165, 190, 230, 0.12);
+      }
+
+      .card-head h2 {
+        margin: 0 0 7px;
+        font-size: 18px;
+      }
+
+      .card-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .stage {
+        min-height: 220px;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+          linear-gradient(-45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+          #0c1219;
+        background-size: 22px 22px;
+      }
+
+      .icon {
+        --size: 128px;
+        width: var(--size);
+        height: var(--size);
+        position: relative;
+        display: grid;
+        place-items: center;
+        border-radius: 25%;
+        background:
+          radial-gradient(circle at 32% 24%, rgba(95, 175, 255, 0.32), transparent 32%),
+          linear-gradient(145deg, #162232 0%, #0a111a 100%);
+        box-shadow:
+          inset 0 0 0 calc(var(--size) * 0.025) rgba(190, 218, 255, 0.14),
+          0 calc(var(--size) * 0.12) calc(var(--size) * 0.28) rgba(0, 0, 0, 0.42);
+      }
+
+      .icon::before {
+        content: "";
+        position: absolute;
+        width: 58%;
+        height: 58%;
+        border-radius: 50%;
+        background:
+          conic-gradient(var(--cyan) 0 286deg, rgba(94, 111, 130, 0.52) 286deg 360deg);
+        -webkit-mask: radial-gradient(circle, transparent 50%, #000 52%);
+        mask: radial-gradient(circle, transparent 50%, #000 52%);
+      }
+
+      .icon::after {
+        content: "BI";
+        position: absolute;
+        bottom: 19%;
+        right: 18%;
+        color: #eafcff;
+        font-size: calc(var(--size) * 0.18);
+        font-weight: 950;
+        letter-spacing: 0;
+      }
+
+      .icon.screen::before {
+        width: 64%;
+        height: 48%;
+        border-radius: 14%;
+        border: calc(var(--size) * 0.045) solid var(--cyan);
+        background: transparent;
+        -webkit-mask: none;
+        mask: none;
+      }
+
+      .icon.screen .ring {
+        position: absolute;
+        width: 35%;
+        height: 35%;
+        border-radius: 50%;
+        background: conic-gradient(var(--green) 0 310deg, rgba(94, 111, 130, 0.48) 310deg 360deg);
+        -webkit-mask: radial-gradient(circle, transparent 50%, #000 52%);
+        mask: radial-gradient(circle, transparent 50%, #000 52%);
+      }
+
+      .icon.screen::after {
+        content: "";
+        bottom: 17%;
+        left: 34%;
+        width: 32%;
+        height: 5%;
+        border-radius: 999px;
+        background: rgba(234, 252, 255, 0.85);
+      }
+
+      .icon.token::before {
+        width: 58%;
+        height: 58%;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at 34% 28%, rgba(145, 212, 255, 0.96), transparent 30%),
+          linear-gradient(145deg, rgba(77, 166, 255, 0.96), rgba(35, 102, 229, 0.92));
+        -webkit-mask: none;
+        mask: none;
+        box-shadow: inset 0 0 0 calc(var(--size) * 0.05) rgba(255, 255, 255, 0.16);
+      }
+
+      .icon.token::after {
+        content: "";
+        bottom: auto;
+        right: auto;
+        width: 34%;
+        height: 34%;
+        border-radius: 50%;
+        background:
+          conic-gradient(#eaf6ff 0 250deg, rgba(234, 246, 255, 0.22) 250deg 360deg);
+        -webkit-mask: radial-gradient(circle, transparent 48%, #000 51%);
+        mask: radial-gradient(circle, transparent 48%, #000 51%);
+      }
+
+      .sizes {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        align-items: end;
+        gap: 12px;
+        padding: 16px;
+      }
+
+      .size-box {
+        min-height: 112px;
+        display: grid;
+        place-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .s16 {
+        --size: 16px;
+      }
+
+      .s32 {
+        --size: 32px;
+      }
+
+      .s64 {
+        --size: 64px;
+      }
+
+      .s128 {
+        --size: 96px;
+      }
+
+      .s512 {
+        --size: 112px;
+      }
+
+      .note {
+        margin-top: 18px;
+        padding: 16px;
+        border: 1px solid rgba(56, 215, 238, 0.22);
+        border-radius: var(--radius);
+        background: rgba(56, 215, 238, 0.06);
+        color: var(--soft, #cbd6e6);
+        line-height: 1.7;
+      }
+
+      @media (max-width: 960px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 560px) {
+        main {
+          padding: 16px;
+        }
+
+        .sizes {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Token BI Icon 方向预览</h1>
+      <p class="lead">这份文件只用于确认图像方向。确认后再生成正式 PNG / ICNS，并替换 Tauri 打包资源。</p>
+
+      <section class="grid">
+        <article class="card">
+          <div class="card-head">
+            <h2>A · 环形额度主标</h2>
+            <p>深色圆角底 + 高对比额度环 + 小型 BI 标识。识别效率最高，推荐优先。</p>
+          </div>
+          <div class="stage"><div class="icon"></div></div>
+          <div class="sizes">
+            <div class="size-box"><div class="icon s16"></div><span>16px</span></div>
+            <div class="size-box"><div class="icon s32"></div><span>32px</span></div>
+            <div class="size-box"><div class="icon s64"></div><span>64px</span></div>
+            <div class="size-box"><div class="icon s128"></div><span>128px</span></div>
+            <div class="size-box"><div class="icon s512"></div><span>512px</span></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>B · 副屏仪表盘</h2>
+            <p>强调副屏常驻场景。产品语义更强，但 16px 和 32px 尺寸细节更容易损失。</p>
+          </div>
+          <div class="stage"><div class="icon screen"><span class="ring"></span></div></div>
+          <div class="sizes">
+            <div class="size-box"><div class="icon screen s16"><span class="ring"></span></div><span>16px</span></div>
+            <div class="size-box"><div class="icon screen s32"><span class="ring"></span></div><span>32px</span></div>
+            <div class="size-box"><div class="icon screen s64"><span class="ring"></span></div><span>64px</span></div>
+            <div class="size-box"><div class="icon screen s128"><span class="ring"></span></div><span>128px</span></div>
+            <div class="size-box"><div class="icon screen s512"><span class="ring"></span></div><span>512px</span></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>C · 蓝色 Token 仪表标</h2>
+            <p>已选方向。以蓝色为主色，保留 Token 和仪表盘语义，后续用于正式图标细化。</p>
+          </div>
+          <div class="stage"><div class="icon token"></div></div>
+          <div class="sizes">
+            <div class="size-box"><div class="icon token s16"></div><span>16px</span></div>
+            <div class="size-box"><div class="icon token s32"></div><span>32px</span></div>
+            <div class="size-box"><div class="icon token s64"></div><span>64px</span></div>
+            <div class="size-box"><div class="icon token s128"></div><span>128px</span></div>
+            <div class="size-box"><div class="icon token s512"></div><span>512px</span></div>
+          </div>
+        </article>
+      </section>
+
+      <p class="note">已确认选择 C 方向，并调整为蓝色主色调。下一步可基于该方向生成正式 PNG / ICNS 图标资源。</p>
+    </main>
+  </body>
+</html>

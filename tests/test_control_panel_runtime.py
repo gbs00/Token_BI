@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import socket
 
 from scripts import control_panel
@@ -93,6 +92,45 @@ def test_error_payload_maps_known_failures_to_next_steps() -> None:
     assert payload["next_step"]
 
 
+def test_app_health_payload_identifies_token_bi_control_panel(monkeypatch, tmp_path) -> None:
+    pid_file = tmp_path / "token_bi.pid"
+    runtime_file = tmp_path / "token_bi_runtime.json"
+
+    monkeypatch.setattr(control_panel, "PID_FILE", pid_file)
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", runtime_file)
+    monkeypatch.setattr(control_panel, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(control_panel.sys, "frozen", False, raising=False)
+
+    payload = control_panel._app_health_payload()
+
+    assert payload["ok"] is True
+    assert payload["service"] == "token-bi-control-panel"
+    assert payload["control_port"] == control_panel.CONTROL_PORT
+    assert payload["main_port"] == control_panel.DEFAULT_MAIN_PORT
+    assert payload["pid"] == ""
+    assert payload["app_data_dir"] == str(tmp_path)
+    assert payload["packaged"] is False
+
+
+def test_app_health_payload_cleans_stale_runtime_state(monkeypatch, tmp_path) -> None:
+    pid_file = tmp_path / "token_bi.pid"
+    runtime_file = tmp_path / "token_bi_runtime.json"
+    stale_pid = "999999"
+    pid_file.write_text(stale_pid, encoding="utf-8")
+    runtime_file.write_text('{"port": 8799, "pid": "999999"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(control_panel, "PID_FILE", pid_file)
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", runtime_file)
+    monkeypatch.setattr(control_panel, "_pid_alive", lambda pid: False)
+
+    payload = control_panel._app_health_payload()
+
+    assert payload["pid"] == ""
+    assert payload["main_port"] == control_panel.DEFAULT_MAIN_PORT
+    assert not pid_file.exists()
+    assert not runtime_file.exists()
+
+
 def test_control_panel_uses_single_service_button_and_hidden_qr_modal() -> None:
     assert 'id="serviceActionBtn"' in control_panel.HTML
     assert 'id="startBtn"' not in control_panel.HTML
@@ -101,29 +139,29 @@ def test_control_panel_uses_single_service_button_and_hidden_qr_modal() -> None:
     assert "closePairModal" in control_panel.HTML
 
 
-def test_control_panel_uses_design_grid_layout() -> None:
-    assert 'class="topbar"' in control_panel.HTML
-    assert 'class="info-grid"' in control_panel.HTML
-    assert 'class="control-grid"' in control_panel.HTML
-    assert 'class="workspace-grid"' in control_panel.HTML
+def test_control_panel_uses_v102_console_layout() -> None:
+    assert 'class="app"' in control_panel.HTML
+    assert 'class="summary"' in control_panel.HTML
+    assert 'class="main-grid"' in control_panel.HTML
+    assert 'class="action-panel"' in control_panel.HTML
     assert "本机隐私说明" not in control_panel.HTML
 
 
-def test_completed_first_run_guide_collapses_to_reopenable_tab() -> None:
-    assert 'id="controlGrid"' in control_panel.HTML
-    assert ".guide.compact" in control_panel.HTML
-    assert ".control-grid.guide-compact-layout" in control_panel.HTML
-    compact_match = re.search(r"\.guide\.compact \{(?P<body>.*?)\n      \}", control_panel.HTML, re.S)
-    assert compact_match is not None
-    compact_css = compact_match.group("body")
-    assert "justify-self: stretch" in compact_css
-    assert "width: 100%" in compact_css
-    assert "max-width: none" in compact_css
-    guide_head_match = re.search(r"\.guide\.compact \.guide-head \{(?P<body>.*?)\n      \}", control_panel.HTML, re.S)
-    assert guide_head_match is not None
-    assert "width: 100%" in guide_head_match.group("body")
-    assert "guideExpandedByUser" in control_panel.HTML
-    assert "firstRunGuide.classList.toggle('compact'" in control_panel.HTML
-    assert "controlGrid.classList.toggle('guide-compact-layout'" in control_panel.HTML
-    assert "查看引导" in control_panel.HTML
-    assert "收起引导" in control_panel.HTML
+def test_control_panel_keeps_confirmed_v102_actions_only() -> None:
+    assert "快捷操作" in control_panel.HTML
+    assert 'id="openDashboardBtn"' in control_panel.HTML
+    assert "打开看板" in control_panel.HTML
+    assert 'id="pairDeviceBtn"' in control_panel.HTML
+    assert "扫码连接副屏" in control_panel.HTML
+    assert 'id="refreshBtn"' in control_panel.HTML
+    assert "刷新状态" in control_panel.HTML
+    assert "清理残留" not in control_panel.HTML
+    assert "打开日志" not in control_panel.HTML
+    assert "首次启动引导" not in control_panel.HTML
+
+
+def test_control_panel_primary_action_matches_account_state() -> None:
+    assert "primaryAction = payload.account ? 'dashboard' : 'account'" in control_panel.HTML
+    assert "primaryAction === 'account'" in control_panel.HTML
+    assert "payload.account ? '打开看板' : '登录账号'" in control_panel.HTML
+    assert "accountActionLabel.textContent = payload.account_action_label || '登录账号'" in control_panel.HTML

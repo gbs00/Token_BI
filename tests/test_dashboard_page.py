@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.models.account import AccountRecord, AccountStatus
+
+
+RING_CIRCUMFERENCE = 263.89378290154264
 
 
 def _write_active_account_with_snapshot(app, account_id: str, email: str, session_pct: int, weekly_pct: int) -> None:
@@ -180,6 +184,10 @@ def test_dashboard_markup_uses_radial_quota_cards_without_outer_percent_or_progr
     assert response.status_code == 200
     html = response.text
     assert "metric-radial" in html
+    assert "metric-radial-svg" in html
+    assert "data-metric-ring-value" in html
+    assert "pathLength" not in html
+    assert f'stroke-dasharray="{RING_CIRCUMFERENCE}"' in html
     assert html.count("data-metric-percent") == 2
     assert "metric-value" not in html
     assert "metric-suffix" not in html
@@ -188,12 +196,41 @@ def test_dashboard_markup_uses_radial_quota_cards_without_outer_percent_or_progr
     assert "Reset time unavailable" not in html
 
 
+def test_dashboard_ring_ratio_uses_real_svg_circumference_for_legacy_safari(app) -> None:
+    _write_active_account_with_snapshot(app, "acc_real", "8754****@qq.com", 92, 99)
+
+    response = TestClient(app).get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    offsets = [float(value) for value in re.findall(r'stroke-dashoffset="([0-9.]+)"', html)]
+    assert len(offsets) == 2
+    assert abs(offsets[0] - RING_CIRCUMFERENCE * 0.08) < 0.001
+    assert abs(offsets[1] - RING_CIRCUMFERENCE * 0.01) < 0.001
+
+
+def test_dashboard_metric_color_follows_remaining_tier_not_metric_type(app) -> None:
+    _write_active_account_with_snapshot(app, "acc_real", "8754****@qq.com", 99, 99)
+
+    response = TestClient(app).get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'class="metric-card metric-session tier-75-plus"' in html
+    assert 'class="metric-card metric-weekly tier-75-plus"' in html
+    assert "metric-weekly tier-25-50" not in html
+
+
 def test_dashboard_uses_desktop_bi_layout_styles() -> None:
     css = Path("app/static/css/dashboard.css").read_text(encoding="utf-8")
 
     assert "width: min(100%, 100vw)" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
-    assert "conic-gradient(var(--metric-color)" in css
+    assert ".metric-ring-value" in css
+    assert ".metric-card.tier-75-plus" in css
+    assert ".metric-card.metric-weekly {\n  --metric-color: var(--amber);\n}" not in css
+    assert "conic-gradient" not in css
+    assert "aspect-ratio: 1" not in css
     assert "min-height: 100dvh" in css
     assert ".agent-nav" not in css
 
@@ -202,8 +239,13 @@ def test_dashboard_landscape_keeps_quota_number_prominent_on_small_ios_screens()
     css = Path("app/static/css/dashboard.css").read_text(encoding="utf-8")
 
     assert "@media (orientation: landscape) and (max-height: 620px)" in css
+    assert "@media (orientation: landscape) and (max-height: 380px) and (max-width: 700px)" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
-    assert "width: min(34vh, 200px)" in css
+    assert "width: 158px" in css
+    assert "height: 158px" in css
+    assert "font-size: 38px" in css
+    assert "min-height: 0" in css
+    assert "min-height: 48px" in css
     assert "font-size: clamp(38px, 11vw, 54px)" not in css
 
 
@@ -228,6 +270,14 @@ def test_dashboard_js_can_create_metric_cards_after_error_state() -> None:
     assert "createMetricCard(metric)" in js
     assert 'card.setAttribute("data-metric-card", metric.metric_type)' in js
     assert "metric-radial" in js
+    assert "metric-radial-svg" in js
+    assert "data-metric-ring-value" in js
+    assert "pathLength" not in js
+    assert "ringCircumference" in js
+    assert "ringOffset" in js
+    assert "function getTierClass(remaining)" in js
+    assert "tier-75-plus" in js
+    assert 'ringNode.setAttribute("stroke-dashoffset"' in js
     assert "progress-track" not in js
 
 

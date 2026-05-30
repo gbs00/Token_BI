@@ -251,7 +251,7 @@ class CodexCliRpcConnector:
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "clientInfo": {"name": "token-bi", "version": "1.0.0"},
+                        "clientInfo": {"name": "token-bi", "version": "1.0.2"},
                         "capabilities": {"experimentalApi": True},
                     },
                 },

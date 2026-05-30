@@ -1,5 +1,6 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -7,11 +8,15 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use serde_json::Value;
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 use url::Url;
 
 const CONTROL_URL: &str = "http://127.0.0.1:8790/";
+const CONTROL_ADDR: &str = "127.0.0.1:8790";
+const CONTROL_HEALTH_PATH: &str = "/api/app/health";
+const CONTROL_SERVICE_MARKER: &str = "token-bi-control-panel";
 
 type SharedChild = Arc<Mutex<Option<CommandChild>>>;
 
@@ -26,22 +31,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            let child = start_control_panel_sidecar(app)?;
-            {
-                let mut guard = setup_child
-                    .lock()
-                    .map_err(|_| "Unable to lock sidecar child state.".to_string())?;
-                *guard = Some(child);
-            }
-            wait_for_control_panel()?;
-
-            let url = Url::parse(CONTROL_URL).map_err(|error| error.to_string())?;
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Token BI")
-                .inner_size(960.0, 760.0)
-                .min_inner_size(720.0, 560.0)
-                .resizable(true)
-                .build()?;
+            let window = match ensure_control_panel(app, &setup_child) {
+                Ok(()) => create_control_window(app)?,
+                Err(error) => create_startup_error_window(app, &error)?,
+            };
 
             let cleanup_child = setup_child.clone();
             let cleanup_flag = setup_cleanup.clone();
@@ -92,15 +85,142 @@ fn start_control_panel_sidecar(app: &tauri::App) -> Result<CommandChild, String>
     Ok(child)
 }
 
-fn wait_for_control_panel() -> Result<(), String> {
+fn ensure_control_panel(app: &tauri::App, sidecar_child: &SharedChild) -> Result<(), String> {
+    match probe_control_panel_health_once() {
+        HealthProbe::Ready => return Ok(()),
+        HealthProbe::Invalid(reason) => return Err(reason),
+        HealthProbe::Unreachable => {}
+    }
+
+    let child = start_control_panel_sidecar(app)?;
+    {
+        let mut guard = sidecar_child
+            .lock()
+            .map_err(|_| "Unable to lock sidecar child state.".to_string())?;
+        *guard = Some(child);
+    }
+
+    wait_for_control_panel_health()
+}
+
+fn create_control_window(app: &tauri::App) -> tauri::Result<WebviewWindow> {
+    let url = Url::parse(CONTROL_URL).map_err(|error| tauri::Error::InvalidUrl(error))?;
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+        .title("Token BI")
+        .inner_size(960.0, 760.0)
+        .min_inner_size(720.0, 560.0)
+        .resizable(true)
+        .build()
+}
+
+fn create_startup_error_window(app: &tauri::App, reason: &str) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(
+        app,
+        "main",
+        WebviewUrl::App(PathBuf::from("startup-error.html")),
+    )
+    .title("Token BI 启动失败")
+    .inner_size(520.0, 440.0)
+    .min_inner_size(460.0, 380.0)
+    .resizable(true)
+    .initialization_script(startup_error_script("Token BI 启动失败", reason))
+    .build()
+}
+
+fn wait_for_control_panel_health() -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(12);
     while Instant::now() < deadline {
-        if TcpStream::connect("127.0.0.1:8790").is_ok() {
-            return Ok(());
+        match probe_control_panel_health_once() {
+            HealthProbe::Ready => return Ok(()),
+            HealthProbe::Invalid(reason) => return Err(reason),
+            HealthProbe::Unreachable => thread::sleep(Duration::from_millis(300)),
         }
-        thread::sleep(Duration::from_millis(300));
     }
-    Err("Control panel did not become reachable on 127.0.0.1:8790.".to_string())
+    Err("Token BI 控制台健康检查超时，请重新打开 App 或查看运行日志。".to_string())
+}
+
+enum HealthProbe {
+    Ready,
+    Unreachable,
+    Invalid(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ControlHealth {
+    service: String,
+}
+
+fn probe_control_panel_health_once() -> HealthProbe {
+    match read_control_health_response() {
+        Ok(response) => match parse_control_health_response(&response) {
+            Ok(_health) => HealthProbe::Ready,
+            Err(reason) => HealthProbe::Invalid(format!(
+                "127.0.0.1:8790 已被占用，但未返回 Token BI 控制台健康信息：{reason}"
+            )),
+        },
+        Err(HealthReadError::Unreachable) => HealthProbe::Unreachable,
+        Err(HealthReadError::Invalid(reason)) => HealthProbe::Invalid(reason),
+    }
+}
+
+enum HealthReadError {
+    Unreachable,
+    Invalid(String),
+}
+
+fn read_control_health_response() -> Result<String, HealthReadError> {
+    let mut stream = TcpStream::connect(CONTROL_ADDR).map_err(|_| HealthReadError::Unreachable)?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| HealthReadError::Invalid(error.to_string()))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| HealthReadError::Invalid(error.to_string()))?;
+
+    let request = format!(
+        "GET {CONTROL_HEALTH_PATH} HTTP/1.1\r\nHost: {CONTROL_ADDR}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| HealthReadError::Invalid(error.to_string()))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| HealthReadError::Invalid(error.to_string()))?;
+    Ok(response)
+}
+
+fn parse_control_health_response(response: &str) -> Result<ControlHealth, String> {
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "健康检查响应格式不完整。".to_string())?;
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return Err("健康检查 HTTP 状态不是 200。".to_string());
+    }
+
+    let payload: Value = serde_json::from_str(body.trim())
+        .map_err(|error| format!("健康检查 JSON 无法解析：{error}"))?;
+    let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let service = payload
+        .get("service")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if !ok || service != CONTROL_SERVICE_MARKER {
+        return Err("缺少 Token BI 控制台身份标识。".to_string());
+    }
+
+    Ok(ControlHealth { service })
+}
+
+fn startup_error_script(title: &str, detail: &str) -> String {
+    let payload = serde_json::json!({
+        "title": title,
+        "detail": detail,
+    });
+    format!("window.__TOKEN_BI_STARTUP_ERROR__ = {payload};")
 }
 
 fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool) {
@@ -123,5 +243,36 @@ fn post_control_shutdown() {
         let request =
             b"POST /api/app/shutdown HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let _ = stream.write_all(request);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_control_health_response_with_token_bi_marker() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true,\"service\":\"token-bi-control-panel\"}";
+
+        let health = parse_control_health_response(response).expect("health should parse");
+
+        assert_eq!(health.service, "token-bi-control-panel");
+    }
+
+    #[test]
+    fn rejects_health_response_without_token_bi_marker() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+
+        let error = parse_control_health_response(response).expect_err("missing marker must fail");
+
+        assert!(error.contains("Token BI"));
+    }
+
+    #[test]
+    fn startup_error_script_escapes_dynamic_failure_text() {
+        let script = startup_error_script("端口被占用", "127.0.0.1:8790 \"busy\"");
+
+        assert!(script.contains("window.__TOKEN_BI_STARTUP_ERROR__"));
+        assert!(script.contains("\\\"busy\\\""));
     }
 }

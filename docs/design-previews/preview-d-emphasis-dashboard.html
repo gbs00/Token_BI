@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Token BI 看板预览 D - 额度优先</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #090b0d;
+        --panel: #12161b;
+        --panel-strong: #151b24;
+        --line: #27313d;
+        --text: #f4f7fb;
+        --muted: #8f9cad;
+        --muted-strong: #cad4e3;
+        --green: #5ee38a;
+        --blue: #2f7df6;
+        --tier-75-plus: #59ddea;
+        --tier-50-75: #4385ff;
+        --tier-25-50: #ffd166;
+        --tier-25-below: #ff8f88;
+        --radius: 8px;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        color: var(--text);
+        background: var(--bg);
+      }
+
+      .stage {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 14px;
+        padding: 12px;
+      }
+
+      .top-strip,
+      .quota-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+      }
+
+      .top-strip {
+        min-height: 78px;
+        display: grid;
+        grid-template-columns: minmax(220px, 1fr) auto auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px;
+      }
+
+      .account-chip {
+        min-width: 0;
+        min-height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 13px;
+        border: 1px solid #344052;
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+      }
+
+      .avatar {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        color: var(--tier-75-plus);
+        border: 1px solid #384656;
+        border-radius: var(--radius);
+        font-weight: 850;
+      }
+
+      .account-copy {
+        min-width: 0;
+      }
+
+      .account-copy strong {
+        display: block;
+        overflow: hidden;
+        color: var(--text);
+        font-size: 22px;
+        font-weight: 850;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .account-copy span,
+      .status-item span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status-item {
+        min-width: 120px;
+        display: grid;
+        gap: 4px;
+        white-space: nowrap;
+      }
+
+      .status-item strong {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+        font-size: 20px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 0 4px #163022;
+      }
+
+      .sync-button {
+        min-height: 52px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 24px;
+        color: #f8fbff;
+        border: 1px solid #4e9bff;
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, #3385ff 0%, #246be8 100%);
+        box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14);
+        font-size: 22px;
+        font-weight: 850;
+        white-space: nowrap;
+      }
+
+      .quota-grid {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .quota-card {
+        --metric-color: var(--tier-75-plus);
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 20px;
+      }
+
+      .quota-title {
+        margin: 0;
+        color: var(--text);
+        font-size: 34px;
+        line-height: 1.05;
+        font-weight: 850;
+        letter-spacing: 0;
+      }
+
+      .ring-zone {
+        min-height: 0;
+        display: grid;
+        place-items: center;
+      }
+
+      .radial {
+        width: 280px;
+        height: 280px;
+        max-width: 100%;
+        display: grid;
+        place-items: center;
+        position: relative;
+        color: var(--metric-color);
+      }
+
+      .radial svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+
+      .ring-track,
+      .ring-value {
+        fill: none;
+        stroke-width: 10;
+        stroke-linecap: round;
+      }
+
+      .ring-track {
+        stroke: #252c35;
+      }
+
+      .ring-value {
+        stroke: var(--metric-color);
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+      }
+
+      .radial-inner {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+      }
+
+      .radial-inner strong {
+        display: block;
+        color: var(--metric-color);
+        font-size: 70px;
+        line-height: 0.95;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .radial-inner span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .quota-footer {
+        display: flex;
+        justify-content: flex-end;
+        color: var(--muted-strong);
+        font-size: 22px;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      @media (min-width: 1180px) {
+        .stage {
+          padding: 20px;
+        }
+
+        .radial {
+          width: min(42vh, 330px);
+          height: min(42vh, 330px);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .top-strip {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .quota-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .sync-button {
+          width: 100%;
+        }
+
+        .quota-card {
+          min-height: 460px;
+        }
+      }
+
+      @media (orientation: landscape) and (max-height: 620px) {
+        .stage {
+          gap: 8px;
+          padding: 8px;
+        }
+
+        .top-strip {
+          min-height: 60px;
+          grid-template-columns: minmax(180px, 1fr) minmax(90px, auto) minmax(78px, auto) minmax(110px, auto);
+          gap: 8px;
+          padding: 8px;
+        }
+
+        .account-chip,
+        .sync-button {
+          min-height: 44px;
+        }
+
+        .quota-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .quota-card {
+          min-height: 0;
+          padding: 12px;
+          gap: 5px;
+        }
+
+        .quota-title {
+          font-size: 26px;
+        }
+
+        .radial {
+          width: 160px;
+          height: 160px;
+        }
+
+        .radial-inner strong {
+          font-size: 42px;
+        }
+
+        .quota-footer {
+          font-size: 16px;
+        }
+      }
+
+      @media (orientation: landscape) and (max-height: 380px) and (max-width: 700px) {
+        .stage {
+          gap: 6px;
+          padding: 6px;
+        }
+
+        .top-strip {
+          min-height: 48px;
+          grid-template-columns: minmax(132px, 1.1fr) minmax(76px, 0.7fr) minmax(64px, 0.55fr) minmax(92px, 0.72fr);
+          gap: 6px;
+          padding: 6px;
+        }
+
+        .account-chip {
+          min-height: 38px;
+          gap: 6px;
+          padding: 5px 7px;
+        }
+
+        .avatar {
+          width: 28px;
+          height: 28px;
+          font-size: 11px;
+        }
+
+        .account-copy strong {
+          font-size: 14px;
+        }
+
+        .account-copy span,
+        .status-item span {
+          font-size: 9px;
+        }
+
+        .status-item {
+          min-width: 0;
+          gap: 2px;
+        }
+
+        .status-item strong {
+          gap: 4px;
+          font-size: 13px;
+        }
+
+        .status-dot {
+          width: 7px;
+          height: 7px;
+          box-shadow: 0 0 0 2px #163022;
+        }
+
+        .sync-button {
+          min-height: 38px;
+          padding: 0 8px;
+          font-size: 14px;
+        }
+
+        .quota-grid {
+          gap: 6px;
+        }
+
+        .quota-card {
+          padding: 8px;
+          gap: 2px;
+        }
+
+        .quota-title {
+          font-size: 22px;
+        }
+
+        .radial {
+          width: 158px;
+          height: 158px;
+        }
+
+        .ring-track,
+        .ring-value {
+          stroke-width: 9;
+        }
+
+        .radial-inner strong {
+          font-size: 38px;
+        }
+
+        .radial-inner span {
+          margin-top: 5px;
+          font-size: 9px;
+        }
+
+        .quota-footer {
+          font-size: 13px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <section class="top-strip" aria-label="看板上下文">
+        <div class="account-chip">
+          <div class="avatar">TB</div>
+          <div class="account-copy">
+            <strong>guob****@gmail.com</strong>
+            <span>当前账号</span>
+          </div>
+        </div>
+        <div class="status-item">
+          <span>数据源</span>
+          <strong><span class="status-dot"></span>本机服务</strong>
+        </div>
+        <div class="status-item">
+          <span>下次同步</span>
+          <strong>01:40</strong>
+        </div>
+        <div class="sync-button">同步额度</div>
+      </section>
+
+      <section class="quota-grid" aria-label="额度窗口">
+        <article class="quota-card">
+          <h1 class="quota-title">5h 额度</h1>
+          <div class="ring-zone">
+            <div class="radial">
+              <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                <circle
+                  class="ring-value"
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  stroke-dasharray="263.89378290154264"
+                  stroke-dashoffset="47.50088092227767"
+                ></circle>
+              </svg>
+              <div class="radial-inner">
+                <strong>82%</strong>
+                <span>剩余额度</span>
+              </div>
+            </div>
+          </div>
+          <div class="quota-footer">重置剩余 44m</div>
+        </article>
+
+        <article class="quota-card">
+          <h1 class="quota-title">周额度</h1>
+          <div class="ring-zone">
+            <div class="radial">
+              <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                <circle
+                  class="ring-value"
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  stroke-dasharray="263.89378290154264"
+                  stroke-dashoffset="7.916813487046279"
+                ></circle>
+              </svg>
+              <div class="radial-inner">
+                <strong>97%</strong>
+                <span>剩余额度</span>
+              </div>
+            </div>
+          </div>
+          <div class="quota-footer">重置剩余 6d 19h</div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
