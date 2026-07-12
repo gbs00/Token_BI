@@ -9,7 +9,7 @@ from scripts.control_cli import build_parser as build_control_parser
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "1.0.2"
+EXPECTED_VERSION = "1.1.1"
 
 
 def test_control_cli_has_control_panel_arguments():
@@ -39,7 +39,7 @@ def test_control_panel_backend_command_uses_executable_when_frozen(monkeypatch):
     assert control_panel._backend_command(["health"]) == ["/tmp/token-bi-backend", "health"]
 
 
-def test_release_version_metadata_matches_v102() -> None:
+def test_release_version_metadata_matches_v111() -> None:
     package_json = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     tauri_config = json.loads(
@@ -51,5 +51,5 @@ def test_release_version_metadata_matches_v102() -> None:
     assert package_lock["version"] == EXPECTED_VERSION
     assert package_lock["packages"][""]["version"] == EXPECTED_VERSION
     assert tauri_config["version"] == EXPECTED_VERSION
-    assert re.search(r'^version = "1\.0\.2"$', cargo_toml, flags=re.MULTILINE)
+    assert re.search(r'^version = "1\.1\.1"$', cargo_toml, flags=re.MULTILINE)
     assert create_app().version == EXPECTED_VERSION

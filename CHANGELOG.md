@@ -2,9 +2,9 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
-## Unreleased - P0 账号链路与首次启动稳定性
+## v1.1.1 - 账号链路、启动性能与控制台/看板重构
 
-日期：2026-07-11
+日期：2026-07-12
 
 数据源与账号：
 
@@ -55,7 +55,9 @@
 
 - Python 完整回归：122 passed。
 - Rust/Tauri 单元测试：5 passed。
-- `npm run app:build` 通过，生成 `Token BI.app` 与 `Token BI_1.0.2_aarch64.dmg`。
+- `npm run app:build` 通过，生成 `Token BI.app` 与 `Token BI_1.1.1_aarch64.dmg`。
+- macOS App 使用 ad hoc 签名保证包内资源完整性，App 深度签名验证与 DMG 镜像校验均通过；当前仍未使用 Apple Developer ID 签名或完成 Apple 公证。
+- 本次 Release 由本地构建和验证后手动发布，远端 GitHub Actions 发布流水线保持停用。
 
 控制台与看板 UI 重构（2026-07-12）：
 
