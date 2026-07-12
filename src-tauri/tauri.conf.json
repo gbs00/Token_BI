@@ -14,7 +14,11 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/token-bi-backend"],
+    "externalBin": ["binaries/token-bi-control"],
+    "resources": {
+      "../dist/token-bi-control": "token-bi-control-runtime",
+      "../dist/token-bi-backend": "token-bi-backend-runtime"
+    },
     "icon": ["icons/icon.icns"],
     "targets": ["app", "dmg"],
     "macOS": {

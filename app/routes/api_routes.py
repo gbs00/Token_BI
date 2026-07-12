@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 import shutil
@@ -12,6 +13,7 @@ from app.models.usage_snapshot import PageState
 
 
 router = APIRouter(prefix="/api/v1")
+MAIN_SERVICE_MARKER = "token-bi-main-service"
 
 
 def _chrome_available() -> bool:
@@ -46,6 +48,42 @@ def list_accounts(request: Request) -> dict[str, list[dict[str, str]]]:
         for account in container.account_service.list_visible_accounts()
     ]
     return {"items": items}
+
+
+@router.get("/health")
+def health(request: Request) -> dict:
+    return {
+        "ok": True,
+        "service": MAIN_SERVICE_MARKER,
+        "pid": os.getpid(),
+        "port": request.app.state.settings.port,
+        "version": request.app.version,
+    }
+
+
+@router.get("/runtime-status")
+def runtime_status(request: Request) -> dict:
+    container = request.app.state.container
+    account = container.account_service.preferred_account()
+    cached = container.usage_service.get_cached_dashboard(
+        account.account_id if account is not None else None
+    )
+    usage = None
+    if cached is not None:
+        usage = {
+            "state": cached.state.value,
+            "updated_at": cached.summary.updated_at,
+            "source_type": cached.summary.source_type,
+            "source_detail": cached.summary.source_detail,
+            "connector_name": cached.summary.connector_name,
+        }
+    return {
+        "ok": True,
+        "service": MAIN_SERVICE_MARKER,
+        "pid": os.getpid(),
+        "account": account.model_dump(mode="json") if account is not None else None,
+        "usage": usage,
+    }
 
 
 @router.get("/dashboard")
@@ -127,7 +165,7 @@ def reauth_account(request: Request, account_id: str) -> dict:
 def login_account_session(request: Request) -> dict:
     container = request.app.state.container
     account = container.account_service.preferred_account()
-    if account is None or account.status == AccountStatus.ACTIVE:
+    if account is None:
         account = container.account_service.create_account(CreateAccountRequest())
     else:
         refreshed_account = container.account_service.update_account_status(
@@ -174,7 +212,10 @@ def logout_account_session(request: Request, account_id: Optional[str] = None) -
         "action": "logout",
         "account_id": account.account_id,
         "next_button_label": "登录账号",
-        "message": "已退出账号，并删除 Token BI 专用登录态。",
+        "message": (
+            "已清除 Token BI 账号记录和专用 Web 登录态。"
+            "本机 Codex OAuth / CLI 登录态不会被退出。"
+        ),
     }
 
 
@@ -249,13 +290,17 @@ def diagnostics(request: Request) -> dict:
         {
             "code": "oauth_connector_ready",
             "title": "OAuth 数据源",
-            "severity": "ok" if "codex_oauth" in connector_names else "warning",
+            "severity": "ok"
+            if "codex_oauth" in connector_names and codex_auth_available
+            else "warning",
             "next_step": "OAuth 数据源是常规刷新首选链路，不会打开 Chrome 页面。",
         },
         {
             "code": "cli_rpc_connector_ready",
             "title": "CLI RPC 数据源",
-            "severity": "ok" if "codex_cli_rpc" in connector_names else "warning",
+            "severity": "ok"
+            if "codex_cli_rpc" in connector_names and codex_cli_available
+            else "warning",
             "next_step": "OAuth 不可用时将尝试读取 Codex app-server rate limit 数据。",
         },
         {

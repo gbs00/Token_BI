@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
 use url::Url;
 
@@ -17,6 +17,8 @@ const CONTROL_URL: &str = "http://127.0.0.1:8790/";
 const CONTROL_ADDR: &str = "127.0.0.1:8790";
 const CONTROL_HEALTH_PATH: &str = "/api/app/health";
 const CONTROL_SERVICE_MARKER: &str = "token-bi-control-panel";
+const CONTROL_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTROL_HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 type SharedChild = Arc<Mutex<Option<CommandChild>>>;
 
@@ -31,10 +33,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
-            let window = match ensure_control_panel(app, &setup_child) {
-                Ok(()) => create_control_window(app)?,
-                Err(error) => create_startup_error_window(app, &error)?,
-            };
+            let window = create_control_window(app)?;
 
             let cleanup_child = setup_child.clone();
             let cleanup_flag = setup_cleanup.clone();
@@ -47,6 +46,34 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
             }
+
+            let startup_window = window.clone();
+            let startup_app = app.handle().clone();
+            let startup_child = setup_child.clone();
+            let startup_cleanup = setup_cleanup.clone();
+            thread::spawn(move || {
+                let result = ensure_control_panel(&startup_app, &startup_child);
+                if startup_cleanup.load(Ordering::SeqCst) {
+                    stop_started_services(&startup_child);
+                    return;
+                }
+
+                match result {
+                    Ok(()) => {
+                        if let Ok(url) = Url::parse(CONTROL_URL) {
+                            if let Err(error) = startup_window.navigate(url) {
+                                let script =
+                                    bootstrap_error_script("控制台无法打开", &error.to_string());
+                                let _ = startup_window.eval(&script);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let script = bootstrap_error_script("本地服务启动失败", &error);
+                        let _ = startup_window.eval(&script);
+                    }
+                }
+            });
 
             Ok(())
         })
@@ -62,14 +89,13 @@ pub fn run() {
         });
 }
 
-fn start_control_panel_sidecar(app: &tauri::App) -> Result<CommandChild, String> {
+fn start_control_panel_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
     let command = app
         .shell()
-        .sidecar("token-bi-backend")
+        .sidecar("token-bi-control")
         .map_err(|error| format!("Unable to locate Token BI backend sidecar: {error}"))?;
     let (mut rx, child) = command
         .args([
-            "control-panel",
             "--host",
             "127.0.0.1",
             "--port",
@@ -85,7 +111,7 @@ fn start_control_panel_sidecar(app: &tauri::App) -> Result<CommandChild, String>
     Ok(child)
 }
 
-fn ensure_control_panel(app: &tauri::App, sidecar_child: &SharedChild) -> Result<(), String> {
+fn ensure_control_panel(app: &AppHandle, sidecar_child: &SharedChild) -> Result<(), String> {
     match probe_control_panel_health_once() {
         HealthProbe::Ready => return Ok(()),
         HealthProbe::Invalid(reason) => return Err(reason),
@@ -104,8 +130,7 @@ fn ensure_control_panel(app: &tauri::App, sidecar_child: &SharedChild) -> Result
 }
 
 fn create_control_window(app: &tauri::App) -> tauri::Result<WebviewWindow> {
-    let url = Url::parse(CONTROL_URL).map_err(|error| tauri::Error::InvalidUrl(error))?;
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::from("index.html")))
         .title("Token BI")
         .inner_size(960.0, 760.0)
         .min_inner_size(720.0, 560.0)
@@ -113,30 +138,16 @@ fn create_control_window(app: &tauri::App) -> tauri::Result<WebviewWindow> {
         .build()
 }
 
-fn create_startup_error_window(app: &tauri::App, reason: &str) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(
-        app,
-        "main",
-        WebviewUrl::App(PathBuf::from("startup-error.html")),
-    )
-    .title("Token BI 启动失败")
-    .inner_size(520.0, 440.0)
-    .min_inner_size(460.0, 380.0)
-    .resizable(true)
-    .initialization_script(startup_error_script("Token BI 启动失败", reason))
-    .build()
-}
-
 fn wait_for_control_panel_health() -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + CONTROL_HEALTH_TIMEOUT;
     while Instant::now() < deadline {
         match probe_control_panel_health_once() {
             HealthProbe::Ready => return Ok(()),
             HealthProbe::Invalid(reason) => return Err(reason),
-            HealthProbe::Unreachable => thread::sleep(Duration::from_millis(300)),
+            HealthProbe::Unreachable => thread::sleep(CONTROL_HEALTH_POLL_INTERVAL),
         }
     }
-    Err("Token BI 控制台健康检查超时，请重新打开 App 或查看运行日志。".to_string())
+    Err("Token BI 控制台在 30 秒内未就绪，请重新打开 App 或查看运行日志。".to_string())
 }
 
 enum HealthProbe {
@@ -215,12 +226,14 @@ fn parse_control_health_response(response: &str) -> Result<ControlHealth, String
     Ok(ControlHealth { service })
 }
 
-fn startup_error_script(title: &str, detail: &str) -> String {
+fn bootstrap_error_script(title: &str, detail: &str) -> String {
     let payload = serde_json::json!({
         "title": title,
         "detail": detail,
     });
-    format!("window.__TOKEN_BI_STARTUP_ERROR__ = {payload};")
+    format!(
+        "if (window.__TOKEN_BI_BOOTSTRAP__) {{ window.__TOKEN_BI_BOOTSTRAP__.fail({payload}); }}"
+    )
 }
 
 fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool) {
@@ -228,22 +241,59 @@ fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool
         return;
     }
 
-    post_control_shutdown();
-    thread::sleep(Duration::from_millis(500));
+    stop_started_services(sidecar_child);
+}
+
+fn stop_started_services(sidecar_child: &SharedChild) {
+    let shutdown_completed = post_control_shutdown();
 
     if let Ok(mut guard) = sidecar_child.lock() {
         if let Some(child) = guard.take() {
-            let _ = child.kill();
+            if !shutdown_completed {
+                let _ = child.kill();
+            }
         }
     }
 }
 
-fn post_control_shutdown() {
-    if let Ok(mut stream) = TcpStream::connect("127.0.0.1:8790") {
-        let request =
-            b"POST /api/app/shutdown HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-        let _ = stream.write_all(request);
+fn post_control_shutdown() -> bool {
+    let Ok(mut stream) = TcpStream::connect("127.0.0.1:8790") else {
+        return false;
+    };
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .is_err()
+        || stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .is_err()
+    {
+        return false;
     }
+
+    let request =
+        b"POST /api/app/shutdown HTTP/1.1\r\nHost: 127.0.0.1:8790\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+    shutdown_response_ok(&response)
+}
+
+fn shutdown_response_ok(response: &str) -> bool {
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return false;
+    };
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return false;
+    }
+    serde_json::from_str::<Value>(body.trim())
+        .ok()
+        .and_then(|payload| payload.get("ok").and_then(Value::as_bool))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -269,10 +319,26 @@ mod tests {
     }
 
     #[test]
-    fn startup_error_script_escapes_dynamic_failure_text() {
-        let script = startup_error_script("端口被占用", "127.0.0.1:8790 \"busy\"");
+    fn bootstrap_error_script_escapes_dynamic_failure_text() {
+        let script = bootstrap_error_script("端口被占用", "127.0.0.1:8790 \"busy\"");
 
-        assert!(script.contains("window.__TOKEN_BI_STARTUP_ERROR__"));
+        assert!(script.contains("window.__TOKEN_BI_BOOTSTRAP__.fail"));
         assert!(script.contains("\\\"busy\\\""));
+    }
+
+    #[test]
+    fn accepts_completed_shutdown_response() {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+
+        assert!(shutdown_response_ok(response));
+        assert!(!shutdown_response_ok(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":false}"
+        ));
+    }
+
+    #[test]
+    fn control_health_timeout_covers_measured_cold_start() {
+        assert!(CONTROL_HEALTH_TIMEOUT >= Duration::from_secs(30));
+        assert!(CONTROL_HEALTH_POLL_INTERVAL <= Duration::from_millis(200));
     }
 }

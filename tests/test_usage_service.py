@@ -166,12 +166,35 @@ def test_usage_service_bootstraps_local_codex_account_when_no_records(container)
     payload = service.get_dashboard()
     accounts = container.account_service.list_accounts()
 
-    assert payload.state == PageState.READY
+    assert payload.state == PageState.SOURCE_CHANGED
     assert payload.account is not None
     assert payload.account.status == AccountStatus.ACTIVE
     assert payload.account.masked_email == "user****@example.com"
     assert [account.masked_email for account in accounts] == ["user****@example.com"]
     assert payload.metrics == []
+
+
+def test_usage_service_updates_pending_account_from_local_codex_identity(container) -> None:
+    stale_account = container.account_service.create_account(
+        CreateAccountRequest(masked_email="Lark...")
+    )
+    service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="official_single_window"),
+    )
+
+    payload = service.get_dashboard()
+    accounts = container.account_service.list_accounts()
+
+    assert payload.state == PageState.SOURCE_CHANGED
+    assert payload.account is not None
+    assert payload.account.account_id == stale_account.account_id
+    assert payload.account.status == AccountStatus.ACTIVE
+    assert payload.account.masked_email == "user****@example.com"
+    assert len(accounts) == 1
+    assert accounts[0].masked_email == "user****@example.com"
 
 
 def test_usage_service_returns_ready_and_caches(container) -> None:
@@ -237,7 +260,7 @@ def test_usage_service_filters_unknown_official_windows_from_dashboard_metrics(c
 
     payload = service.get_dashboard(account.account_id)
 
-    assert payload.state == PageState.READY
+    assert payload.state == PageState.SOURCE_CHANGED
     assert payload.metrics == []
 
 
@@ -297,6 +320,30 @@ def test_usage_service_returns_stale_when_fetch_fails_after_success(container) -
     stale = failing_service.get_dashboard(account.account_id)
     assert stale.state == PageState.SOURCE_CHANGED
     assert stale.message == "Analytics page may have changed."
+
+
+def test_force_refresh_preserves_last_good_payload_when_fetch_fails(container) -> None:
+    account = _make_active_account(container)
+    ready_service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="ready"),
+    )
+    ready = ready_service.get_dashboard(account.account_id)
+
+    failing_service = UsageService(
+        account_service=container.account_service,
+        cache_service=container.cache_service,
+        session_service=container.session_service,
+        connector_manager=FakeConnectorManager(mode="structure_changed"),
+    )
+    stale = failing_service.refresh_dashboard(account.account_id)
+
+    assert stale.state == PageState.SOURCE_CHANGED
+    assert stale.metrics == ready.metrics
+    assert stale.summary.updated_at == ready.summary.updated_at
+    assert failing_service.get_cached_dashboard(account.account_id) == ready
 
 
 def test_usage_service_marks_session_expired(container) -> None:

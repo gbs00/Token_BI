@@ -51,8 +51,13 @@ class ScraperService:
         return self._parse_artifacts(artifacts)
 
     def fetch_usage_from_page(self, page) -> dict:
-        artifacts = self._collect_page_artifacts(page)
-        return self._parse_artifacts(artifacts)
+        try:
+            artifacts = self._collect_page_artifacts(page)
+            return self._parse_artifacts(artifacts)
+        except PlaywrightTimeoutError as exc:
+            raise ScraperUnavailableError("Codex usage page request timed out.") from exc
+        except PlaywrightError as exc:
+            raise ScraperUnavailableError("Unable to access the Codex usage page.") from exc
 
     def _load_page_artifacts(self, context_dir: str) -> dict:
         try:
@@ -210,12 +215,18 @@ class ScraperService:
         return payload
 
     def _extract_account_identity(self, artifacts: dict, body_text: str) -> Optional[str]:
-        json_sources = [
-            *artifacts.get("directIdentityJsonTexts", []),
-            *artifacts.get("networkJsonTexts", []),
-            *artifacts.get("scriptJsonTexts", []),
-        ]
-        identity = self._extract_identity_from_json_texts(json_sources)
+        identity = self._extract_identity_from_json_texts(
+            artifacts.get("directIdentityJsonTexts", [])
+        )
+        if identity:
+            return identity
+
+        identity = self._extract_email_identity_from_json_texts(
+            [
+                *artifacts.get("networkJsonTexts", []),
+                *artifacts.get("scriptJsonTexts", []),
+            ]
+        )
         if identity:
             return identity
 
@@ -238,6 +249,23 @@ class ScraperService:
                 return identity
         return None
 
+    def _extract_email_identity_from_json_texts(
+        self,
+        json_texts: Iterable[str],
+    ) -> Optional[str]:
+        for text in json_texts:
+            stripped = text.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            identity = self._find_email_identity(payload)
+            if identity:
+                return identity
+        return None
+
     def _find_identity(self, payload: Any) -> Optional[str]:
         return self._find_email_identity(payload) or self._find_label_identity(payload)
 
@@ -245,9 +273,12 @@ class ScraperService:
         if isinstance(payload, dict):
             for key, value in payload.items():
                 key_lower = str(key).lower()
-                if isinstance(value, str):
-                    if "email" in key_lower and "@" in value:
-                        return self._mask_email(value)
+                if (
+                    isinstance(value, str)
+                    and (key_lower == "email" or key_lower.endswith("_email"))
+                    and "@" in value
+                ):
+                    return self._mask_email(value)
                 nested = self._find_email_identity(value)
                 if nested:
                     return nested
@@ -256,10 +287,6 @@ class ScraperService:
                 nested = self._find_email_identity(item)
                 if nested:
                     return nested
-        elif isinstance(payload, str) and "@" in payload:
-            email_match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", payload)
-            if email_match:
-                return self._mask_email(email_match.group(0))
         return None
 
     def _find_label_identity(self, payload: Any) -> Optional[str]:

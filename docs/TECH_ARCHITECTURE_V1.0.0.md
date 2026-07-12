@@ -86,9 +86,10 @@ v1.0.0 的核心变化是：
 
 ```mermaid
 flowchart LR
-    T["Token BI.app (Tauri Shell)"] --> S["token-bi-backend Sidecar"]
-    S --> C["Local Control Panel"]
-    S --> D["FastAPI Dashboard Service"]
+    T["Token BI.app (Tauri Shell)"] --> H["Local Console Shell"]
+    T --> L["Rust Control Launcher"]
+    L --> C["token-bi-control Runtime"]
+    C --> D["token-bi-backend Runtime"]
     P["Sidecar Device Browser"] --> D
 
     D --> A["Account Service"]
@@ -107,6 +108,15 @@ flowchart LR
     R --> CR["codex app-server"]
     G --> CW["Codex Web Usage Page"]
 ```
+
+### 4.1 v1.0.2 桌面端启动边界
+
+- Tauri 窗口与 Python 健康检查解耦：窗口先显示本地控制台壳层，轻量控制服务就绪后在同一 WebView 内导航到完整控制台。
+- `token-bi-control` 只承担控制台 HTML/API、健康检查和主服务生命周期管理，不导入 FastAPI、Playwright 或 usage connector 重依赖。
+- `token-bi-backend` 承担账号、usage connector、Web Session 兜底和副屏看板 API，只在用户开启服务时按需启动。
+- Rust launcher 只负责定位 App Resources 中的 onedir 运行时、注入主服务路径并用 `exec` 替换自身，避免额外常驻父进程。
+- 两套 Python 运行时均使用 PyInstaller onedir，用包体积换取日常启动时不重复解包的稳定时延。
+- 用户产品概念仍然是单一“Token BI 控制台”；该拆分是内部进程职责优化，不将控制台与运维服务拆成两个用户界面。
 
 ## 5. 数据源策略
 

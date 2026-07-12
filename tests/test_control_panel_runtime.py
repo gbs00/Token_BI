@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import socket
+import subprocess
+import sys
+from types import SimpleNamespace
 
 from scripts import control_panel
 
@@ -46,6 +49,22 @@ def test_port_available_allows_recently_closed_listener() -> None:
     assert control_panel._port_available(port) is True
 
 
+def test_stop_pid_reaps_exited_child_process(monkeypatch) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    )
+    monkeypatch.setattr(control_panel, "_pid_is_token_bi_main", lambda _pid: True)
+
+    try:
+        assert control_panel._stop_pid(str(process.pid)) is True
+        assert control_panel._pid_alive(str(process.pid)) is False
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def test_start_main_server_cleans_runtime_files_when_readiness_fails(monkeypatch, tmp_path) -> None:
     pid_file = tmp_path / "token_bi.pid"
     runtime_file = tmp_path / "token_bi_runtime.json"
@@ -70,6 +89,71 @@ def test_start_main_server_cleans_runtime_files_when_readiness_fails(monkeypatch
     assert "did not become ready" in message
     assert not pid_file.exists()
     assert not runtime_file.exists()
+
+
+def test_packaged_main_server_resets_pyinstaller_environment(monkeypatch, tmp_path) -> None:
+    pid_file = tmp_path / "token_bi.pid"
+    runtime_file = tmp_path / "token_bi_runtime.json"
+    log_dir = tmp_path / "logs"
+    captured = {}
+
+    class FakeProcess:
+        pid = 12345
+
+    def fake_popen(*args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr(control_panel, "PID_FILE", pid_file)
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", runtime_file)
+    monkeypatch.setattr(control_panel, "LOG_DIR", log_dir)
+    monkeypatch.setattr(control_panel, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(control_panel, "APP_DATA_DIR", tmp_path)
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (False, None))
+    monkeypatch.setattr(control_panel, "_select_main_port", lambda start_port, max_port: 8787)
+    monkeypatch.setattr(control_panel, "_backend_command", lambda args: ["fake-token-bi"])
+    monkeypatch.setattr(control_panel, "_wait_for_main_server", lambda port=None: False)
+    monkeypatch.setattr(control_panel.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(control_panel.sys, "frozen", True, raising=False)
+
+    control_panel._start_main_server_process()
+
+    assert captured["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
+def test_packaged_control_uses_sibling_backend_binary(monkeypatch, tmp_path) -> None:
+    control_binary = tmp_path / "token-bi-control"
+    monkeypatch.setattr(control_panel.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(control_panel.sys, "executable", str(control_binary))
+    monkeypatch.delenv("TOKEN_BI_MAIN_BACKEND_BIN", raising=False)
+
+    command = control_panel._backend_command(["main-server", "--port", "8787"])
+
+    assert command == [
+        str(tmp_path / "token-bi-backend"),
+        "main-server",
+        "--port",
+        "8787",
+    ]
+
+
+def test_dashboard_urls_cache_system_network_probe(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(stdout="192.168.1.8\n")
+
+    monkeypatch.setattr(control_panel, "_dashboard_url_cache", None)
+    monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
+    monkeypatch.setattr(control_panel.subprocess, "run", fake_run)
+
+    first = control_panel._dashboard_urls()
+    second = control_panel._dashboard_urls()
+
+    assert first == second
+    assert first["lan"] == "http://192.168.1.8:8787/dashboard"
+    assert calls == [["ipconfig", "getifaddr", "en0"]]
 
 
 def test_account_action_button_label_is_state_driven() -> None:
@@ -131,19 +215,121 @@ def test_app_health_payload_cleans_stale_runtime_state(monkeypatch, tmp_path) ->
     assert not runtime_file.exists()
 
 
+def test_status_payload_prefers_main_service_account(monkeypatch) -> None:
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "12345"))
+    monkeypatch.setattr(
+        control_panel,
+        "_main_visible_accounts",
+        lambda: [
+            {
+                "account_id": "acc_real",
+                "masked_email": "tim****@gmail.com",
+                "status": "active",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        control_panel,
+        "_preferred_account",
+        lambda: {
+            "account_id": "acc_old",
+            "masked_email": "Lark...",
+            "status": "pending",
+        },
+    )
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
+    monkeypatch.setattr(control_panel, "_main_runtime_status", lambda: {})
+    monkeypatch.setattr(control_panel, "_diagnostics_items", lambda: [])
+    monkeypatch.setattr(control_panel, "_data_source_status", lambda diagnostics: "")
+    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
+    monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
+    monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
+
+    payload = control_panel._status_payload()
+
+    assert payload["account"]["account_id"] == "acc_real"
+    assert payload["account"]["masked_email"] == "tim****@gmail.com"
+    assert payload["account_action_label"] == "退出账号"
+
+
+def test_status_payload_uses_actual_last_successful_source_and_time(monkeypatch) -> None:
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "12345"))
+    monkeypatch.setattr(
+        control_panel,
+        "_main_runtime_status",
+        lambda: {
+            "service": "token-bi-main-service",
+            "account": {
+                "account_id": "acc_real",
+                "masked_email": "tim****@gmail.com",
+                "status": "active",
+            },
+            "usage": {
+                "state": "ready",
+                "updated_at": "2026-07-11T10:20:00+08:00",
+                "source_type": "cli_rpc",
+                "source_detail": "cli_rate_limits",
+                "connector_name": "codex_cli_rpc",
+            },
+        },
+    )
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
+    monkeypatch.setattr(control_panel, "_diagnostics_items", lambda: [])
+    monkeypatch.setattr(control_panel, "_data_source_status", lambda diagnostics: "")
+    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
+    monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
+    monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
+
+    payload = control_panel._status_payload()
+
+    assert payload["usage"]["source_type"] == "cli_rpc"
+    assert payload["usage"]["updated_at"] == "2026-07-11T10:20:00+08:00"
+
+
+def test_refresh_live_accounts_bootstraps_local_codex_when_no_accounts(monkeypatch) -> None:
+    def fake_request(method: str, path: str, payload: dict | None = None, timeout: int = 30) -> dict:
+        assert method == "POST"
+        assert path == "/api/v1/dashboard/refresh"
+        return {
+            "state": "ready",
+            "account": {
+                "account_id": "acc_local",
+                "masked_email": "tim****@gmail.com",
+            },
+            "summary": {
+                "source_type": "oauth",
+                "source_detail": "oauth_usage_api",
+                "connector_name": "codex_oauth",
+            },
+        }
+
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "12345"))
+    monkeypatch.setattr(control_panel, "_main_visible_accounts", lambda: [])
+    monkeypatch.setattr(control_panel, "_main_api_request", fake_request)
+
+    payload = control_panel._refresh_live_accounts()
+
+    assert payload["ok"] is True
+    assert "tim****@gmail.com" in payload["message"]
+    assert payload["results"][0]["source_type"] == "oauth"
+
+
 def test_control_panel_uses_single_service_button_and_hidden_qr_modal() -> None:
     assert 'id="serviceActionBtn"' in control_panel.HTML
     assert 'id="startBtn"' not in control_panel.HTML
     assert 'id="stopBtn"' not in control_panel.HTML
     assert 'id="pairModal" class="modal-backdrop hidden"' in control_panel.HTML
-    assert "closePairModal" in control_panel.HTML
+    assert 'data-close="pairModal"' in control_panel.HTML
 
 
-def test_control_panel_uses_v102_console_layout() -> None:
-    assert 'class="app"' in control_panel.HTML
-    assert 'class="summary"' in control_panel.HTML
+def test_control_panel_uses_latest_console_layout() -> None:
+    assert 'class="app-shell"' in control_panel.HTML
+    assert 'class="topnav"' in control_panel.HTML
+    assert 'class="summary-grid"' in control_panel.HTML
     assert 'class="main-grid"' in control_panel.HTML
-    assert 'class="action-panel"' in control_panel.HTML
+    assert 'class="card panel action-panel"' in control_panel.HTML
+    assert 'class="bottom-grid"' in control_panel.HTML
+    assert 'class="service-list"' in control_panel.HTML
     assert "本机隐私说明" not in control_panel.HTML
 
 
@@ -161,7 +347,24 @@ def test_control_panel_keeps_confirmed_v102_actions_only() -> None:
 
 
 def test_control_panel_primary_action_matches_account_state() -> None:
-    assert "primaryAction = payload.account ? 'dashboard' : 'account'" in control_panel.HTML
-    assert "primaryAction === 'account'" in control_panel.HTML
-    assert "payload.account ? '打开看板' : '登录账号'" in control_panel.HTML
-    assert "accountActionLabel.textContent = payload.account_action_label || '登录账号'" in control_panel.HTML
+    assert 'primaryAction = hasActiveAccount ? "dashboard" : "account"' in control_panel.HTML
+    assert 'primaryAction === "account"' in control_panel.HTML
+    assert 'hasActiveAccount ? "打开看板" : "登录账号"' in control_panel.HTML
+    assert 'payload.account_action_label || "登录账号"' in control_panel.HTML
+
+
+def test_control_panel_latest_ui_keeps_real_dialog_actions() -> None:
+    assert 'id="logsModal" class="modal-backdrop hidden"' in control_panel.HTML
+    assert 'id="accountModal" class="modal-backdrop hidden"' in control_panel.HTML
+    assert 'id="loginModal" class="modal-backdrop hidden"' in control_panel.HTML
+    assert 'id="confirmLogoutButton"' in control_panel.HTML
+    assert 'id="confirmLoginButton"' in control_panel.HTML
+    assert 'id="toast"' in control_panel.HTML
+    assert 'postAction("/api/account-action"' in control_panel.HTML
+
+
+def test_control_panel_does_not_fake_oauth_or_sync_time() -> None:
+    assert "dataSourceValue.textContent = payload.account ? 'OAuth'" not in control_panel.HTML
+    assert "lastRefreshValue.textContent = now.toLocaleTimeString" not in control_panel.HTML
+    assert "sourceLabel(usage.source_type)" in control_panel.HTML
+    assert "formatSyncTime(usage && usage.updated_at)" in control_panel.HTML

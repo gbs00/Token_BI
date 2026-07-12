@@ -335,7 +335,7 @@ class BrowserWorkerService:
                 capture_output=True,
                 text=True,
             )
-        except subprocess.SubprocessError:
+        except (OSError, subprocess.SubprocessError):
             return None
 
         lookup = sorted(((str(path), path) for path in context_dirs), key=lambda item: len(item[0]), reverse=True)

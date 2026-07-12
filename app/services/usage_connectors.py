@@ -79,13 +79,13 @@ class CodexOAuthConnector:
 
     def auth_available(self) -> bool:
         try:
-            self._read_access_token()
+            access_token, _ = self._read_auth_tokens()
         except ScraperUnavailableError:
             return False
-        return True
+        return not self._token_expired(access_token)
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
-        access_token = self._read_access_token()
+        access_token, id_token = self._read_auth_tokens()
         if self._token_expired(access_token):
             raise SessionExpiredError("Codex local login expired. Please complete Codex login again.")
 
@@ -99,7 +99,9 @@ class CodexOAuthConnector:
             source_type=self.source_type,
             source_detail="oauth_usage_api",
         )
-        account_identity = self._extract_account_identity(access_token)
+        account_identity = self._extract_account_identity(id_token) or self._extract_account_identity(
+            access_token
+        )
         if account_identity:
             normalized["account_masked_email"] = account_identity
         return UsageConnectorResult(
@@ -109,22 +111,30 @@ class CodexOAuthConnector:
             payload=normalized,
         )
 
-    def _read_access_token(self) -> str:
+    def _read_auth_tokens(self) -> tuple[str, Optional[str]]:
+        unreadable_paths: list[Path] = []
         for path in self._auth_paths:
             if not path.exists():
                 continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                raise ScraperUnavailableError("Codex auth file is unreadable.") from exc
+            except (json.JSONDecodeError, OSError):
+                unreadable_paths.append(path)
+                continue
 
             tokens = payload.get("tokens")
             if not isinstance(tokens, dict):
                 continue
             access_token = tokens.get("access_token") or tokens.get("accessToken")
             if isinstance(access_token, str) and access_token.strip():
-                return access_token.strip()
+                id_token = tokens.get("id_token") or tokens.get("idToken")
+                normalized_id_token = (
+                    id_token.strip() if isinstance(id_token, str) and id_token.strip() else None
+                )
+                return access_token.strip(), normalized_id_token
 
+        if unreadable_paths:
+            raise ScraperUnavailableError("Codex auth file is unreadable.")
         raise ConnectorNotApplicableError("Codex local auth is not available.")
 
     def _token_expired(self, token: str) -> bool:
@@ -638,7 +648,10 @@ def _remaining_pct(raw_window: dict) -> Optional[int]:
 
     used = _first_present(raw_window, ("used_percent", "usedPercent", "used_percentage"))
     if used is not None:
-        return _clamp_pct(100 - int(float(used)))
+        try:
+            return _clamp_pct(100 - float(used))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AnalyticsPageChangedError("Usage percentage has an unsupported value.") from exc
     return None
 
 
@@ -649,7 +662,10 @@ def _window_seconds(raw_window: dict) -> Optional[int]:
     )
     if value is None:
         return None
-    return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AnalyticsPageChangedError("Usage window duration has an unsupported value.") from exc
 
 
 def _window_minutes(raw_window: dict, window_seconds: Optional[int]) -> Optional[int]:
@@ -658,7 +674,10 @@ def _window_minutes(raw_window: dict, window_seconds: Optional[int]) -> Optional
         ("window_minutes", "windowMinutes", "windowDurationMins"),
     )
     if value is not None:
-        return int(value)
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AnalyticsPageChangedError("Usage window duration has an unsupported value.") from exc
     if window_seconds is not None:
         return max(1, int(window_seconds / 60))
     return None
@@ -704,14 +723,23 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc).astimezone()
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).astimezone()
+        except (OverflowError, OSError, ValueError) as exc:
+            raise AnalyticsPageChangedError("Usage reset time has an unsupported value.") from exc
     if isinstance(value, str):
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise AnalyticsPageChangedError("Usage reset time has an unsupported value.") from exc
     raise AnalyticsPageChangedError(f"Unsupported datetime payload: {type(value).__name__}")
 
 
 def _clamp_pct(value: Any) -> int:
-    pct = int(float(value))
+    try:
+        pct = int(round(float(value)))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AnalyticsPageChangedError("Usage percentage has an unsupported value.") from exc
     return max(0, min(100, pct))
 
 

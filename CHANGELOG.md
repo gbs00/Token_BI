@@ -2,6 +2,73 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## Unreleased - P0 账号链路与首次启动稳定性
+
+日期：2026-07-11
+
+数据源与账号：
+
+- 当前版本明确为单 Codex 账号模式，同步优先级固定为 Codex OAuth -> Codex CLI RPC -> Web Session。
+- 已存在本机 OAuth 或 CLI 登录态时，不再被历史 `pending` 账号记录阻断；登录成功会复用当前单账号记录，不再累积重复账号。
+- OAuth 账号身份优先从 `id_token.email` 读取，再回退到 access token profile；同步成功后会自动纠正历史错误别名。
+- 缩紧 Web 页面账号识别规则，仅接受明确的 email 字段，避免把任意网络响应中的 `name` 误当为当前 Codex 账号。
+- 控制台与看板改为展示本次真实成功数据源及实际同步时间，不再因 connector 已注册就显示 `OAuth 可用`，也不再用当前时钟伪造“最近同步”。
+- 强制刷新失败时保留最近一次可用数据；官方仅返回不可识别窗口时进入明确错误态，不再展示空白的正常看板。
+- `config/accounts.json` 改为本机运行数据并移出版本控制，仓库仅保留空的 `config/accounts.example.json`。
+
+启动与退出：
+
+- 本机日志已确认首次启动失败的直接原因：打包后的 control sidecar 使用 `sys.executable` 拉起独立 main server 时复用了 PyInstaller 临时解压环境，父进程退出后子进程报 `No module named 'encodings'`。
+- 拉起独立 main server 前设置 `PYINSTALLER_RESET_ENVIRONMENT=1`，并使用主服务专用健康标识校验启动结果。
+- Tauri 退出改为等待控制服务返回完整关停结果，仅在优雅退出失败时强制结束 sidecar，避免固定 500ms 后终止导致残留进程。
+- PID 操作前校验实际进程命令，拒绝停止已被其他进程复用的过期 PID。
+
+验证：
+
+- Python 完整回归：112 passed。
+- Rust/Tauri 单元测试：5 passed。
+- PyInstaller sidecar 构建通过，`npx tauri build --bundles app` 通过，生成 `Token BI.app`。
+- 受当前执行环境禁止本地 `socket.bind` 影响，4 个端口探测用例需在无沙箱本机环境补跑。
+- 在完整本机环境重新执行 `npm run app:build`，App 与 `Token BI_1.0.2_aarch64.dmg` 均封装成功。
+
+启动性能复核（2026-07-11）：
+
+- 用户首次复测时 `/Applications/Token BI.app` 仍是 2026-05-30 旧包，主程序与 sidecar 哈希均与当日构建不同；已完整替换为 2026-07-11 构建。
+- 新包首次安装后启动：控制台健康检查 15.383s，窗口可见 15.865s；Tauri 在 12s 时提前进入“启动失败”。
+- P0 稳定性修复将 Tauri 控制台健康检查门禁调整为 30s，轮询间隔调整为 200ms；仅修复冷启动误报，不将延长等待当作性能优化。
+- 重新安装后的真实首次启动验收：控制台 16.138s 就绪，窗口 16.624s 可见，窗口标题为正常 `Token BI`，未进入错误页。
+- 同一 PyInstaller one-file sidecar 独立启动 5 次：6.714–9.393s，平均 7.341s；源码模式启动同一控制台仅 0.135s。
+- macOS 统一日志记录 AMFI 对 `token-bi-backend` 的 ad-hoc 签名校验；首次执行的额外延迟与未正式签名、磁盘冷缓存及 one-file 启动成本一致。
+- 结论：主要瓶颈是把控制台与完整 FastAPI / Playwright 能力合并为 48MB PyInstaller one-file sidecar，不是账号同步或控制台 HTML 渲染逻辑。
+
+启动架构优化（2026-07-11）：
+
+- Tauri 不再等待 Python 健康检查后才创建窗口；先立即显示与正式控制台一致的本地壳层，再在后台连接轻量控制服务。启动失败也在同一控制台中显示原因，不再切换独立错误页。
+- 原单个重型 `token-bi-backend` one-file sidecar 拆分为 Rust 启动器、轻量 `token-bi-control` onedir 运行时和按需启动的 `token-bi-backend` onedir 运行时；用户界面仍是一个控制台，仅拆分进程职责。
+- 启动阶段不再预加载 FastAPI、Playwright 与 usage connector 依赖；主服务只在用户开启服务时拉起。
+- 修复主服务终止后的子进程回收：不再把已退出的僵尸态进程误判为“无法停止”。
+- 打包运行时验证：轻量控制服务首次约 2.54s 就绪，主服务约 0.54s 就绪，完整关闭成功且无残留进程。
+- `/Applications` 实际安装验证：新包首次执行窗口 2.885s 可见、控制服务 3.504s 就绪；完全退出后第二次启动窗口 0.056s 可见、控制服务 0.369s 就绪。首次额外时间为新 App 校验与冷缓存成本，日常启动不再承担原 one-file 解包延迟。
+- 性能优先的代价是 App 从约 63MB 增长到约 184MB；DMG 从约 53MB 增长到约 61MB。当前决策优先保证长期使用中的启动速度和稳定性。
+
+最终验证：
+
+- Python 完整回归：122 passed。
+- Rust/Tauri 单元测试：5 passed。
+- `npm run app:build` 通过，生成 `Token BI.app` 与 `Token BI_1.0.2_aarch64.dmg`。
+
+控制台与看板 UI 重构（2026-07-12）：
+
+- 以 `docs/design-previews/preview-v110-console.html` 与 `preview-v110-dashboard.html` 为视觉基准，统一暗色/亮色设计变量、文字层级、状态色和操作控件。
+- 控制台调整为顶部服务总状态、账号/数据源/端口/同步摘要、快捷操作、服务状态、副屏入口与最近日志的工作台布局。
+- 控制台新增真实状态驱动的退出账号确认、登录后刷新、二维码、完整日志与 toast 反馈，保留现有后端 API 契约。
+- 控制台 HTML 从 `control_panel.py` 的大型内联字符串拆分到 `scripts/control_panel.html`，并纳入 PyInstaller control onedir 资源。
+- Tauri 本地启动壳同步新视觉，保持首屏与完整控制台一致，启动失败仍在同一工作台中显示原因。
+- 看板顶部重构为账号、实际数据源、下次同步、最近同步与同步按钮；额度卡增加统一的重置剩余信息行。
+- 看板保留 SVG 真实圆周长算法和额度阶梯显色，没有引入旧 iOS Safari 不支持的 `conic-gradient` 或 `aspect-ratio`。
+- 响应式实测：320×568 竖屏无横向溢出，568×320 iPhone 5s 横屏的两张额度卡同屏完整展示，页面无横向或纵向滚动。
+- 浏览器交互验证覆盖服务启停、副屏二维码、日志弹窗和强制同步；控制台与看板无 console error/warning。
+
 ## v1.0.2 - 控制台稳定性、图标与 iPhone 5s 看板兼容修复
 
 日期：2026-05-30

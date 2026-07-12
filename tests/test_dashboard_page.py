@@ -138,6 +138,7 @@ def test_dashboard_renders_weekly_only_quota_without_session_card(app) -> None:
     assert "89%" in html
     assert "5h 额度" not in html
     assert "Reset time unavailable" not in html
+    assert 'class="quota-grid single"' in html
 
 
 def test_dashboard_api_filters_unknown_windows_and_normalizes_quota_labels(app) -> None:
@@ -216,19 +217,21 @@ def test_dashboard_metric_color_follows_remaining_tier_not_metric_type(app) -> N
 
     assert response.status_code == 200
     html = response.text
-    assert 'class="metric-card metric-session tier-75-plus"' in html
-    assert 'class="metric-card metric-weekly tier-75-plus"' in html
+    assert 'class="quota-card metric-card metric-session tier-75-plus"' in html
+    assert 'class="quota-card metric-card metric-weekly tier-75-plus"' in html
     assert "metric-weekly tier-25-50" not in html
 
 
 def test_dashboard_uses_desktop_bi_layout_styles() -> None:
     css = Path("app/static/css/dashboard.css").read_text(encoding="utf-8")
 
-    assert "width: min(100%, 100vw)" in css
+    assert ".topbar" in css
+    assert ".quota-grid" in css
+    assert ".reset-row" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
     assert ".metric-ring-value" in css
-    assert ".metric-card.tier-75-plus" in css
-    assert ".metric-card.metric-weekly {\n  --metric-color: var(--amber);\n}" not in css
+    assert ".quota-card.tier-75-plus" in css
+    assert ".theme-light" in css
     assert "conic-gradient" not in css
     assert "aspect-ratio: 1" not in css
     assert "min-height: 100dvh" in css
@@ -238,7 +241,7 @@ def test_dashboard_uses_desktop_bi_layout_styles() -> None:
 def test_dashboard_landscape_keeps_quota_number_prominent_on_small_ios_screens() -> None:
     css = Path("app/static/css/dashboard.css").read_text(encoding="utf-8")
 
-    assert "@media (orientation: landscape) and (max-height: 620px)" in css
+    assert "@media (orientation: landscape) and (max-height: 500px) and (min-width: 480px)" in css
     assert "@media (orientation: landscape) and (max-height: 380px) and (max-width: 700px)" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
     assert "width: 158px" in css
@@ -247,6 +250,21 @@ def test_dashboard_landscape_keeps_quota_number_prominent_on_small_ios_screens()
     assert "min-height: 0" in css
     assert "min-height: 48px" in css
     assert "font-size: clamp(38px, 11vw, 54px)" not in css
+
+
+def test_dashboard_latest_ui_keeps_source_detail_sync_state_and_reset_row(app) -> None:
+    _write_active_account_with_snapshot(app, "acc_real", "8754****@qq.com", 86, 72)
+
+    response = TestClient(app).get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'class="topbar"' in html
+    assert 'data-source-detail' in html
+    assert 'data-last-sync' in html
+    assert 'class="sync-button"' in html
+    assert html.count('class="reset-row"') == 2
+    assert "重置剩余" in html
 
 
 def test_dashboard_metric_suffix_uses_margin_for_legacy_safari_without_flex_gap() -> None:
@@ -261,6 +279,29 @@ def test_dashboard_sync_button_forces_live_refresh() -> None:
 
     assert "/api/v1/dashboard/refresh" in js
     assert 'method: forceRefresh ? "POST" : "GET"' in js
+
+
+def test_dashboard_visible_source_label_uses_actual_connector(app) -> None:
+    _write_active_account_with_snapshot(app, "acc_real", "8754****@qq.com", 86, 72)
+
+    response = TestClient(app).get("/dashboard")
+
+    assert response.status_code == 200
+    assert "本地测试数据" in response.text
+    assert 'data-source-label' in response.text
+    assert 'data-source-dot' in response.text
+
+
+def test_dashboard_js_updates_visible_source_and_state_dot() -> None:
+    js = Path("app/static/js/dashboard.js").read_text(encoding="utf-8")
+
+    assert 'document.querySelector("[data-source-label]")' in js
+    assert 'document.querySelector("[data-source-dot]")' in js
+    assert 'sourceLabel(payload.summary && payload.summary.source_type)' in js
+    assert 'document.querySelector("[data-source-detail]")' in js
+    assert 'document.querySelector("[data-last-sync]")' in js
+    assert "function setSyncing(next)" in js
+    assert "function showToast(message, danger)" in js
 
 
 def test_dashboard_js_can_create_metric_cards_after_error_state() -> None:

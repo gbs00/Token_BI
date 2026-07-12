@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,16 +29,13 @@ DEFAULT_MAIN_PORT = int(os.getenv("TOKEN_BI_PORT", "8787"))
 MAX_MAIN_PORT = int(os.getenv("TOKEN_BI_PORT_MAX", "8877"))
 CONTROL_HOST = os.getenv("TOKEN_BI_CONTROL_HOST", "127.0.0.1")
 CONTROL_PORT = int(os.getenv("TOKEN_BI_CONTROL_PORT", "8790"))
+MAIN_SERVICE_MARKER = "token-bi-main-service"
+MAIN_SERVER_START_TIMEOUT_SECONDS = 30
+DASHBOARD_URL_CACHE_TTL_SECONDS = 30
 PID_FILE = RUNTIME_DIR / "token_bi.pid"
 RUNTIME_STATE_FILE = RUNTIME_DIR / "token_bi_runtime.json"
-LOCAL_HOSTNAME = (
-    subprocess.run(
-        ["scutil", "--get", "LocalHostName"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-)
+LOCAL_HOSTNAME = socket.gethostname().split(".")[0]
+_dashboard_url_cache: tuple[float, int, dict[str, str]] | None = None
 
 ACCOUNTS_FILE = APP_DATA_DIR / "config" / "accounts.json"
 
@@ -74,6 +72,28 @@ def _main_visible_accounts() -> list[dict]:
     return [item for item in items if item.get("account_id")]
 
 
+def _main_runtime_status() -> dict:
+    payload = _main_api_request("GET", "/api/v1/runtime-status", timeout=5)
+    if payload.get("service") != MAIN_SERVICE_MARKER:
+        raise RuntimeError("Token BI main service identity check failed.")
+    return payload
+
+
+def _status_account(running: bool, runtime_status: dict | None = None) -> dict | None:
+    if running:
+        runtime_account = (runtime_status or {}).get("account")
+        if runtime_account:
+            return runtime_account
+        try:
+            accounts = _main_visible_accounts()
+        except RuntimeError:
+            accounts = []
+        if accounts:
+            active_accounts = [account for account in accounts if account.get("status") == "active"]
+            return (active_accounts or accounts)[0]
+    return _preferred_account()
+
+
 def _read_runtime_state() -> dict:
     if not RUNTIME_STATE_FILE.exists():
         return {}
@@ -107,7 +127,8 @@ def _current_main_port() -> int:
 def _cleanup_stale_runtime_state() -> None:
     if PID_FILE.exists():
         pid = PID_FILE.read_text(encoding="utf-8").strip()
-        if pid and _pid_alive(pid):
+        process_identity = _pid_is_token_bi_main(pid) if pid and _pid_alive(pid) else False
+        if process_identity is not False:
             return
         PID_FILE.unlink(missing_ok=True)
         _clear_runtime_state()
@@ -146,7 +167,9 @@ def _main_server_running() -> tuple[bool, str | None]:
     if PID_FILE.exists():
         pid = PID_FILE.read_text(encoding="utf-8").strip() or None
         if pid and _pid_alive(pid):
-            return True, pid
+            process_identity = _pid_is_token_bi_main(pid)
+            if process_identity is not False:
+                return True, pid
         PID_FILE.unlink(missing_ok=True)
         _clear_runtime_state()
 
@@ -155,15 +178,69 @@ def _main_server_running() -> tuple[bool, str | None]:
 
 def _pid_alive(pid: str) -> bool:
     try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError):
+        pid_int = int(pid)
+    except ValueError:
+        return False
+
+    try:
+        waited_pid, _ = os.waitpid(pid_int, os.WNOHANG)
+        if waited_pid == pid_int:
+            return False
+    except ChildProcessError:
+        # 控制台重启后主服务可能已不是当前进程的直接子进程。
+        pass
+    except OSError:
+        return False
+
+    try:
+        os.kill(pid_int, 0)
+    except OSError:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid_int), "-o", "state="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return True
+    if result.returncode != 0:
+        return False
+    if result.stdout.strip().upper().startswith("Z"):
         return False
     return True
 
 
+def _pid_is_token_bi_main(pid: str) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    if result.returncode != 0:
+        return False
+    command = result.stdout.strip()
+    return (
+        "token-bi-backend main-server" in command
+        or "-m app.cli main-server" in command
+    )
+
+
 def _backend_command(args: list[str]) -> list[str]:
     if getattr(sys, "frozen", False):
-        return [sys.executable, *args]
+        override = os.getenv("TOKEN_BI_MAIN_BACKEND_BIN")
+        backend_path = (
+            Path(override)
+            if override
+            else Path(sys.executable).with_name("token-bi-backend")
+        )
+        return [str(backend_path), *args]
     return [sys.executable, "-m", "app.cli", *args]
 
 
@@ -173,6 +250,8 @@ def _stop_pid(pid: str) -> bool:
     except ValueError:
         return False
     if not _pid_alive(pid):
+        return False
+    if _pid_is_token_bi_main(pid) is not True:
         return False
 
     try:
@@ -194,7 +273,15 @@ def _stop_pid(pid: str) -> bool:
 
 
 def _dashboard_urls() -> dict[str, str]:
+    global _dashboard_url_cache
+
+    now = time.monotonic()
     port = _current_main_port()
+    if _dashboard_url_cache is not None:
+        cached_at, cached_port, cached_urls = _dashboard_url_cache
+        if cached_port == port and now - cached_at < DASHBOARD_URL_CACHE_TTL_SECONDS:
+            return dict(cached_urls)
+
     base = {
         "local": f"http://127.0.0.1:{port}/dashboard",
         "fixed": f"http://{LOCAL_HOSTNAME}.local:{port}/dashboard" if LOCAL_HOSTNAME else "",
@@ -217,6 +304,7 @@ def _dashboard_urls() -> dict[str, str]:
         wifi_ip = ""
 
     base["lan"] = f"http://{wifi_ip}:{port}/dashboard" if wifi_ip else ""
+    _dashboard_url_cache = (now, port, dict(base))
     return base
 
 
@@ -256,6 +344,9 @@ def _start_main_server_process() -> tuple[bool, str]:
     env["TOKEN_BI_HOST"] = os.getenv("TOKEN_BI_HOST", "0.0.0.0")
     env["TOKEN_BI_PORT"] = str(port)
     env["TOKEN_BI_APP_DATA_DIR"] = str(APP_DATA_DIR)
+    if getattr(sys, "frozen", False):
+        # 主服务是 one-file sidecar 的独立实例，不能复用控制台临时解压目录。
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     command = _backend_command(
         [
             "main-server",
@@ -295,7 +386,9 @@ def _stop_main_server_process() -> tuple[bool, str]:
     messages = []
     if PID_FILE.exists():
         existing_pid = PID_FILE.read_text(encoding="utf-8").strip()
-        if existing_pid and _stop_pid(existing_pid):
+        if existing_pid and _pid_alive(existing_pid):
+            if not _stop_pid(existing_pid):
+                return False, f"Token BI 主服务无法停止（PID {existing_pid}）。"
             stopped = True
             messages.append(f"Token BI stopped (PID {existing_pid}).")
         PID_FILE.unlink(missing_ok=True)
@@ -335,14 +428,18 @@ def _main_api_request(method: str, path: str, payload: dict | None = None, timeo
         raise RuntimeError(f"Unable to reach Token BI service: {exc}") from exc
 
 
-def _wait_for_main_server(timeout_seconds: int = 12, port: int | None = None) -> bool:
+def _wait_for_main_server(
+    timeout_seconds: int = MAIN_SERVER_START_TIMEOUT_SECONDS,
+    port: int | None = None,
+) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         running, _ = _main_server_running()
         if running:
             try:
-                _main_api_request("GET", "/api/v1/accounts", timeout=3)
-                return True
+                payload = _main_api_request("GET", "/api/v1/health", timeout=3)
+                if payload.get("ok") and payload.get("service") == MAIN_SERVICE_MARKER:
+                    return True
             except RuntimeError:
                 pass
         time.sleep(0.5)
@@ -413,7 +510,49 @@ def _refresh_live_accounts() -> dict:
     except RuntimeError:
         accounts = _local_visible_accounts()
     if not accounts:
-        return {"ok": True, "message": "暂无账号。点击“登录账号”开始。"}
+        try:
+            payload = _main_api_request(
+                "POST",
+                "/api/v1/dashboard/refresh",
+                payload={},
+                timeout=45,
+            )
+            results = [
+                {
+                    "account_id": (payload.get("account") or {}).get("account_id"),
+                    "state": payload.get("state"),
+                    "masked_email": (payload.get("account") or {}).get("masked_email"),
+                    "source_type": (payload.get("summary") or {}).get("source_type"),
+                    "source_detail": (payload.get("summary") or {}).get("source_detail"),
+                    "connector_name": (payload.get("summary") or {}).get("connector_name"),
+                    "message": payload.get("message"),
+                }
+            ]
+        except RuntimeError as exc:
+            results = [{"account_id": None, "state": "error", "message": str(exc)}]
+
+        ready = [item for item in results if item.get("state") == "ready"]
+        if ready:
+            labels = ", ".join(dict.fromkeys(item.get("masked_email") or "Codex 本机账号" for item in ready))
+            sources = ", ".join(
+                dict.fromkeys(
+                    (
+                        f"{item.get('source_type') or 'unknown'}"
+                        f"/{item.get('connector_name') or item.get('source_detail') or 'unknown'}"
+                    )
+                    for item in ready
+                )
+            )
+            return {
+                "ok": True,
+                "message": f"状态已刷新，已获取 usage：{labels}。数据源：{sources}",
+                "results": results,
+            }
+
+        payload = _error_payload("login_required")
+        payload["message"] = "状态已刷新，但还没有可用 usage。请确认本机 Codex 或 CLI 已完成登录。"
+        payload["results"] = results
+        return payload
 
     results = []
     for account in accounts:
@@ -481,8 +620,8 @@ def _data_source_status(diagnostics: list[dict]) -> str:
     by_code = {item.get("code"): item for item in diagnostics}
     labels = []
     for code, label in (
-        ("oauth_connector_ready", "OAuth"),
-        ("cli_rpc_connector_ready", "CLI RPC"),
+        ("codex_auth_available", "OAuth"),
+        ("codex_cli_available", "CLI RPC"),
         ("web_session_available", "Web Session"),
     ):
         item = by_code.get(code) or {}
@@ -537,6 +676,7 @@ def _close_token_bi_chrome_workers() -> None:
     )
 
 
+@lru_cache(maxsize=1)
 def _chrome_available() -> bool:
     candidates = [
         Path("/Applications/Google Chrome.app"),
@@ -617,10 +757,15 @@ def _error_payload(code: str, details: str | None = None) -> dict:
     }
 
 
-def _guide_payload(running: bool, account: dict | None, urls: dict[str, str]) -> dict:
+def _guide_payload(
+    running: bool,
+    account: dict | None,
+    urls: dict[str, str],
+    chrome_available: bool,
+) -> dict:
     account_ready = bool(account and account.get("status") == "active")
     checklist = [
-        {"label": "检测 Chrome", "done": _chrome_available()},
+        {"label": "检测 Chrome", "done": chrome_available},
         {"label": "启动本地服务", "done": running},
         {"label": "登录 Codex 账号", "done": account_ready},
         {"label": "刷新 usage 数据", "done": account_ready},
@@ -634,24 +779,38 @@ def _guide_payload(running: bool, account: dict | None, urls: dict[str, str]) ->
 
 def _status_payload() -> dict:
     running, pid = _main_server_running()
-    account = _preferred_account()
+    runtime_status = {}
+    if running:
+        try:
+            runtime_status = _main_runtime_status()
+        except RuntimeError:
+            runtime_status = {}
+    account = _status_account(running, runtime_status)
     urls = _dashboard_urls()
+    chrome_available = _chrome_available()
     account_action_label = _account_action_label(account)
     diagnostics = _diagnostics_items()
     return {
         "running": running,
         "pid": pid,
         "port": _current_main_port(),
+        "control_port": CONTROL_PORT,
         "hostname": LOCAL_HOSTNAME,
         "packaged": bool(getattr(sys, "frozen", False)),
         "app_data_dir": str(APP_DATA_DIR),
-        "chrome_available": _chrome_available(),
+        "chrome_available": chrome_available,
         "urls": urls,
         "service_action_label": _service_action_label(running),
         "account_action_label": account_action_label,
-        "guide": _guide_payload(running=running, account=account, urls=urls),
+        "guide": _guide_payload(
+            running=running,
+            account=account,
+            urls=urls,
+            chrome_available=chrome_available,
+        ),
         "diagnostics": diagnostics,
         "data_source_status": _data_source_status(diagnostics),
+        "usage": runtime_status.get("usage"),
         "account": {
             "masked_email": account.get("masked_email"),
             "status": account.get("status"),
@@ -678,1365 +837,8 @@ def _app_health_payload() -> dict:
     }
 
 
-HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="data:," />
-    <title>Token BI 控制台</title>
-    <style>
-      :root {
-        --bg: #0c121c;
-        --panel: #121926;
-        --panel-2: #171f2e;
-        --panel-3: #1f2939;
-        --line: rgba(201, 217, 255, .10);
-        --line-strong: rgba(123, 218, 244, .45);
-        --text: #f2f6ff;
-        --muted: #a9b3c7;
-        --soft: #cdd6e6;
-        --accent: #73def3;
-        --accent-2: #9bf3a7;
-        --ok: #7de184;
-        --warn: #f4cc69;
-        --danger: #ff867d;
-        --shadow: 0 28px 90px rgba(0, 0, 0, .36);
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: "Avenir Next", "SF Pro Display", "PingFang SC", sans-serif;
-        color: var(--text);
-        background:
-          radial-gradient(circle at 18% 0%, rgba(64, 118, 236, .22), transparent 28%),
-          radial-gradient(circle at 90% 10%, rgba(87, 226, 191, .10), transparent 24%),
-          linear-gradient(180deg, #0b111b 0%, #101721 100%);
-      }
-      .shell {
-        min-height: 100vh;
-        padding: 34px 38px 74px;
-      }
-      .panel {
-        width: min(100%, 1120px);
-        margin: 0 auto;
-      }
-      h1 {
-        margin: 0;
-        font-size: clamp(34px, 5.2vw, 56px);
-        letter-spacing: .01em;
-        line-height: 1;
-      }
-      p { margin: 0; }
-      .sub {
-        color: var(--muted);
-        margin-top: 18px;
-        font-size: 17px;
-        letter-spacing: .02em;
-      }
-      .topbar {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 24px;
-      }
-      .top-actions {
-        display: flex;
-        align-items: center;
-        gap: 18px;
-        padding-top: 6px;
-      }
-      .service-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 9px;
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 800;
-        white-space: nowrap;
-      }
-      .status-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        background: var(--warn);
-        box-shadow: 0 0 18px rgba(244, 204, 105, .28);
-      }
-      .status-dot.ok {
-        background: var(--ok);
-        box-shadow: 0 0 18px rgba(125, 225, 132, .34);
-      }
-      .service-status-text.ok {
-        color: var(--ok);
-      }
-      .service-status-text.warn {
-        color: var(--muted);
-      }
-      .info-grid {
-        margin-top: 24px;
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-      }
-      .info-card,
-      .mini-card {
-        min-width: 0;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background:
-          linear-gradient(180deg, rgba(31, 40, 57, .68), rgba(17, 25, 38, .82));
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
-      }
-      .info-card {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 14px;
-        align-items: center;
-        min-height: 82px;
-        padding: 16px 18px;
-      }
-      .info-icon {
-        width: 34px;
-        height: 34px;
-        display: grid;
-        place-items: center;
-        color: var(--soft);
-      }
-      .info-icon svg {
-        width: 28px;
-        height: 28px;
-        stroke: currentColor;
-        fill: none;
-        stroke-width: 1.9;
-      }
-      .info-title {
-        color: var(--text);
-        font-size: 14px;
-        font-weight: 900;
-      }
-      .info-copy {
-        margin-top: 5px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.35;
-        word-break: break-word;
-      }
-      .control-grid {
-        margin-top: 16px;
-        display: grid;
-        grid-template-columns: 1fr 1.65fr 1fr;
-        gap: 14px;
-        align-items: stretch;
-        transition: grid-template-columns .18s ease;
-      }
-      .control-grid.guide-compact-layout {
-        grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
-        align-items: start;
-      }
-      .mini-card {
-        padding: 18px;
-      }
-      .section-title {
-        color: var(--text);
-        font-size: 15px;
-        font-weight: 900;
-        letter-spacing: .04em;
-      }
-      .account-value {
-        margin-top: 18px;
-        color: var(--text);
-        font-size: 22px;
-        font-weight: 900;
-        line-height: 1.25;
-        word-break: break-word;
-      }
-      .account-hint {
-        margin-top: 8px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .account-panel button {
-        width: 100%;
-        margin-top: 20px;
-        min-height: 42px;
-        font-size: 14px;
-      }
-      .guide {
-        margin-top: 0;
-        transition:
-          min-height .18s ease,
-          padding .18s ease,
-          background .18s ease,
-          border-color .18s ease;
-      }
-      .guide.compact {
-        order: -1;
-        grid-column: 1 / -1;
-        align-self: start;
-        justify-self: stretch;
-        width: 100%;
-        max-width: none;
-        min-height: auto;
-        padding: 14px 18px;
-        border-radius: 14px;
-        border-color: rgba(125, 225, 132, .24);
-        background:
-          linear-gradient(180deg, rgba(125, 225, 132, .10), rgba(28, 39, 55, .72));
-      }
-      .guide-head {
-        min-height: auto;
-        padding: 0;
-        justify-content: space-between;
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-        color: var(--text);
-      }
-      .guide.compact .guide-head {
-        width: 100%;
-        min-height: 34px;
-        gap: 18px;
-      }
-      #guideSummary {
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 900;
-        letter-spacing: .04em;
-      }
-      .guide.compact #guideSummary {
-        padding: 6px 10px;
-        border: 1px solid rgba(125, 225, 132, .28);
-        border-radius: 999px;
-        color: var(--ok);
-        background: rgba(125, 225, 132, .08);
-      }
-      .guide-body {
-        margin-top: 22px;
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 10px;
-        padding: 0;
-      }
-      .guide-body.collapsed {
-        display: none;
-      }
-      .guide-step {
-        display: grid;
-        justify-items: center;
-        gap: 9px;
-        min-width: 0;
-        color: var(--muted);
-        text-align: center;
-        font-weight: 800;
-        font-size: 12px;
-      }
-      .guide-check {
-        width: 28px;
-        height: 28px;
-        display: grid;
-        place-items: center;
-        border-radius: 999px;
-        border: 1px solid rgba(73, 132, 255, .42);
-        color: transparent;
-        background: rgba(73, 132, 255, .16);
-      }
-      .guide-step.done {
-        color: var(--soft);
-      }
-      .guide-step.done .guide-check {
-        color: #06101b;
-        border-color: rgba(125, 225, 132, .9);
-        background: var(--ok);
-      }
-      .quick-panel {
-        display: grid;
-        align-content: start;
-        gap: 10px;
-      }
-      .quick-panel button {
-        width: 100%;
-        min-height: 38px;
-        justify-content: flex-start;
-        padding: 9px 12px;
-        font-size: 13px;
-      }
-      .workspace-grid {
-        margin-top: 14px;
-        display: grid;
-        grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
-        gap: 14px;
-      }
-      .notice-warning {
-        color: var(--warn);
-        font-weight: 800;
-      }
-      .notice-ok {
-        color: var(--ok);
-        font-weight: 800;
-      }
-      .status {
-        margin-top: 28px;
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
-      }
-      .card {
-        display: grid;
-        grid-template-columns: auto 1fr;
-        align-items: center;
-        gap: 22px;
-        min-height: 116px;
-        background:
-          linear-gradient(180deg, rgba(31, 40, 57, .86), rgba(20, 27, 40, .94));
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 22px 24px;
-        min-width: 0;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
-      }
-      .status-icon {
-        width: 56px;
-        height: 56px;
-        display: grid;
-        place-items: center;
-        border-radius: 999px;
-        color: var(--warn);
-        border: 1px solid rgba(244, 204, 105, .34);
-        background: rgba(244, 204, 105, .05);
-      }
-      .status-icon.ok {
-        color: var(--ok);
-        border-color: rgba(125, 225, 132, .34);
-        background: rgba(125, 225, 132, .06);
-      }
-      .status-icon svg {
-        width: 28px;
-        height: 28px;
-        stroke: currentColor;
-        fill: none;
-        stroke-width: 2.1;
-      }
-      .label {
-        color: var(--muted);
-        font-size: 15px;
-        font-weight: 700;
-        letter-spacing: .08em;
-      }
-      .value {
-        margin-top: 12px;
-        font-size: clamp(20px, 2.4vw, 27px);
-        font-weight: 800;
-        letter-spacing: .02em;
-        word-break: break-word;
-      }
-      .ok { color: var(--ok); }
-      .warn { color: var(--warn); }
-      .danger { color: var(--danger); }
-      .actions {
-        margin-top: 26px;
-        display: grid;
-        grid-template-columns: repeat(6, minmax(130px, auto));
-        gap: 14px;
-        justify-content: start;
-      }
-      button {
-        appearance: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        min-height: 50px;
-        border: 1px solid var(--line);
-        background: linear-gradient(180deg, rgba(42, 53, 73, .95), rgba(31, 41, 58, .96));
-        color: var(--soft);
-        border-radius: 12px;
-        padding: 12px 18px;
-        font-size: 16px;
-        font-weight: 800;
-        letter-spacing: .02em;
-        cursor: pointer;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
-        transition: transform .16s ease, border-color .16s ease, background .16s ease;
-      }
-      button:hover {
-        transform: translateY(-1px);
-        border-color: rgba(115, 222, 243, .34);
-      }
-      button.secondary {
-        background: rgba(255,255,255,.05);
-        border-color: var(--line);
-      }
-      button.add {
-        background: rgba(255,255,255,.07);
-      }
-      button.connect {
-        color: var(--text);
-        border-color: rgba(155, 243, 167, .34);
-        background:
-          linear-gradient(180deg, rgba(125, 225, 132, .18), rgba(37, 88, 82, .42));
-      }
-      button.primary {
-        color: var(--text);
-        border-color: var(--line-strong);
-        background:
-          linear-gradient(180deg, rgba(83, 170, 199, .34), rgba(36, 93, 119, .60));
-      }
-      button.service-stop {
-        color: #fff;
-        border-color: rgba(255, 134, 125, .42);
-        background:
-          linear-gradient(180deg, rgba(255, 112, 116, .96), rgba(214, 61, 70, .96));
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, .18),
-          0 14px 30px rgba(255, 86, 94, .18);
-      }
-      button .icon {
-        width: 18px;
-        height: 18px;
-        stroke: currentColor;
-        fill: none;
-        stroke-width: 2.2;
-      }
-      .links {
-        margin-top: 0;
-        display: grid;
-        overflow: hidden;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        background: rgba(16, 23, 34, .72);
-      }
-      .link-row {
-        display: grid;
-        grid-template-columns: 160px minmax(0, 1fr) auto auto;
-        align-items: center;
-        gap: 16px;
-        padding: 14px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, .055);
-      }
-      .link-row:last-child {
-        border-bottom: 0;
-      }
-      .link-label {
-        color: var(--muted);
-        font-size: 16px;
-        font-weight: 800;
-        letter-spacing: .04em;
-      }
-      .link-value {
-        color: var(--text);
-        word-break: break-all;
-        font-size: 18px;
-        letter-spacing: .01em;
-      }
-      .icon-button {
-        min-height: 38px;
-        min-width: 48px;
-        padding: 8px 12px;
-        border-radius: 10px;
-      }
-      .log-card {
-        margin-top: 0;
-        overflow: hidden;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        background: rgba(11, 16, 24, .72);
-      }
-      .log-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, .07);
-      }
-      .log-title {
-        color: var(--soft);
-        font-weight: 800;
-        letter-spacing: .08em;
-      }
-      pre {
-        margin: 0;
-        padding: 14px 18px 18px;
-        height: 210px;
-        background: #0c121a;
-        color: #bfc9d8;
-        font-family: "SF Mono", "Menlo", "Consolas", monospace;
-        font-size: 14px;
-        line-height: 1.52;
-        overflow: auto;
-        white-space: pre-wrap;
-      }
-      .flash {
-        margin-top: 16px;
-        color: var(--muted);
-        min-height: 20px;
-      }
-      .bottom-bar {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        min-height: 58px;
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 22px;
-        padding: 12px 34px;
-        color: var(--muted);
-        background: rgba(17, 24, 34, .92);
-        border-top: 1px solid rgba(255, 255, 255, .08);
-        backdrop-filter: blur(16px);
-      }
-      .bar-item {
-        display: inline-flex;
-        align-items: center;
-        gap: 9px;
-        font-weight: 800;
-      }
-      .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        background: var(--warn);
-        box-shadow: 0 0 18px rgba(244, 204, 105, .28);
-      }
-      .dot.ok {
-        background: var(--ok);
-        box-shadow: 0 0 18px rgba(125, 225, 132, .34);
-      }
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        z-index: 20;
-        display: grid;
-        place-items: center;
-        padding: 28px;
-        background:
-          radial-gradient(circle at 50% 15%, rgba(115, 222, 243, .16), transparent 28%),
-          rgba(3, 7, 12, .72);
-        backdrop-filter: blur(18px);
-      }
-      .modal-backdrop.hidden {
-        display: none;
-      }
-      .modal {
-        width: min(820px, 100%);
-        max-height: min(760px, calc(100vh - 56px));
-        overflow: auto;
-        border: 1px solid rgba(126, 157, 212, .22);
-        border-radius: 24px;
-        background:
-          linear-gradient(180deg, rgba(24, 34, 51, .98), rgba(13, 20, 31, .98));
-        box-shadow: var(--shadow);
-      }
-      .modal-head {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 18px;
-        padding: 26px 28px 10px;
-      }
-      .modal-title {
-        margin: 0;
-        font-size: clamp(26px, 3vw, 34px);
-        line-height: 1.05;
-      }
-      .modal-sub {
-        margin-top: 10px;
-        color: var(--muted);
-        font-size: 15px;
-        line-height: 1.5;
-      }
-      .close-button {
-        min-width: 44px;
-        min-height: 44px;
-        padding: 10px;
-        border-radius: 999px;
-      }
-      .pair-warning {
-        margin: 8px 28px 0;
-        color: var(--warn);
-        font-weight: 800;
-        min-height: 22px;
-      }
-      .qr-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
-        padding: 20px 28px 28px;
-      }
-      .qr-card {
-        min-width: 0;
-        padding: 18px;
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, .045);
-      }
-      .qr-card.primary-qr {
-        border-color: rgba(115, 222, 243, .34);
-        background: rgba(33, 70, 98, .24);
-      }
-      .qr-title {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        color: var(--text);
-        font-size: 17px;
-        font-weight: 900;
-      }
-      .pill {
-        border: 1px solid rgba(125, 225, 132, .34);
-        border-radius: 999px;
-        padding: 5px 9px;
-        color: var(--accent-2);
-        font-size: 12px;
-        letter-spacing: .06em;
-      }
-      .qr-box {
-        margin-top: 14px;
-        display: grid;
-        place-items: center;
-        aspect-ratio: 1;
-        border-radius: 18px;
-        padding: 14px;
-        background:
-          linear-gradient(180deg, #f8fbff, #eaf2ff);
-        box-shadow: inset 0 0 0 1px rgba(30, 50, 80, .12);
-      }
-      .qr-box img {
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-      }
-      .qr-url {
-        margin-top: 12px;
-        color: var(--soft);
-        font-size: 14px;
-        line-height: 1.45;
-        word-break: break-all;
-      }
-      .qr-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-top: 14px;
-      }
-      .qr-hint {
-        padding: 0 28px 28px;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-      @media (max-width: 720px) {
-        .shell { padding: 24px 18px 84px; }
-        .topbar, .top-actions { align-items: flex-start; flex-direction: column; }
-        .info-grid, .control-grid, .workspace-grid { grid-template-columns: 1fr; }
-        .control-grid.guide-compact-layout { grid-template-columns: 1fr; }
-        .guide.compact { justify-self: stretch; max-width: none; }
-        .guide-body { grid-template-columns: 1fr; }
-        .link-row { grid-template-columns: 1fr auto auto; }
-        .link-label { grid-column: 1 / -1; }
-        .qr-grid { grid-template-columns: 1fr; }
-        .modal-backdrop { padding: 14px; }
-        .bottom-bar { justify-content: flex-start; flex-wrap: wrap; }
-      }
-      .app {
-        width: min(1120px, 100%);
-        min-height: 100vh;
-        margin: 0 auto;
-        padding: 24px;
-        display: grid;
-        grid-template-rows: auto auto 1fr auto;
-        gap: 14px;
-      }
-      .app .topbar {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 18px;
-        align-items: center;
-        padding: 18px;
-        border: 1px solid #2a3544;
-        border-radius: 8px;
-        background: rgba(17, 24, 33, .94);
-        box-shadow: 0 18px 55px rgba(0, 0, 0, .28);
-      }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        min-width: 0;
-      }
-      .mark {
-        width: 44px;
-        height: 44px;
-        display: grid;
-        place-items: center;
-        border: 1px solid #36506b;
-        border-radius: 8px;
-        color: #35d4ee;
-        background: #101a25;
-        font-weight: 900;
-      }
-      .app h1 {
-        margin: 0 0 5px;
-        font-size: clamp(24px, 3vw, 34px);
-        line-height: 1.1;
-        letter-spacing: 0;
-      }
-      .subtitle {
-        margin: 0;
-        color: #97a6bb;
-        font-size: 13px;
-      }
-      .status-line {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-      .status-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        min-height: 34px;
-        padding: 0 12px;
-        border: 1px solid rgba(66, 216, 124, .30);
-        border-radius: 8px;
-        color: #dfffe9;
-        background: rgba(66, 216, 124, .09);
-        font-weight: 800;
-      }
-      .status-pill.warn {
-        border-color: rgba(244, 201, 93, .30);
-        color: #fff1bd;
-        background: rgba(244, 201, 93, .08);
-      }
-      .v102-dot {
-        width: 10px;
-        height: 10px;
-        flex: 0 0 auto;
-        border-radius: 50%;
-        background: #42d87c;
-        box-shadow: 0 0 0 4px rgba(66, 216, 124, .14);
-      }
-      .v102-dot.warn {
-        background: #f4c95d;
-        box-shadow: 0 0 0 4px rgba(244, 201, 93, .14);
-      }
-      .v102-dot.idle {
-        background: #728096;
-        box-shadow: 0 0 0 4px rgba(114, 128, 150, .14);
-      }
-      .summary {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-      }
-      .metric,
-      .app .panel,
-      .action-panel {
-        width: auto;
-        margin: 0;
-        min-width: 0;
-        border: 1px solid #2a3544;
-        border-radius: 8px;
-        background: #111821;
-      }
-      .metric {
-        min-height: 98px;
-        padding: 15px;
-      }
-      .account-metric {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 12px;
-        align-items: start;
-      }
-      .metric span {
-        display: block;
-        margin-bottom: 10px;
-        color: #97a6bb;
-        font-size: 12px;
-      }
-      .metric strong {
-        display: block;
-        overflow: hidden;
-        color: #f1f6ff;
-        font-size: clamp(18px, 2.5vw, 26px);
-        line-height: 1.1;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .metric small {
-        display: block;
-        margin-top: 8px;
-        color: #97a6bb;
-        font-size: 12px;
-      }
-      .metric-action {
-        min-width: 76px;
-        min-height: 30px;
-        height: 30px;
-        padding: 0 10px;
-        border: 1px solid #344050;
-        border-radius: 8px;
-        color: #cbd6e6;
-        background: #101721;
-        font-size: 13px;
-        font-weight: 800;
-        box-shadow: none;
-      }
-      .main-grid {
-        display: grid;
-        grid-template-columns: minmax(360px, 1.04fr) minmax(300px, .96fr);
-        gap: 14px;
-      }
-      .action-panel {
-        padding: 18px;
-        display: grid;
-        align-content: start;
-        gap: 18px;
-      }
-      .section-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 16px;
-      }
-      .section-head h2 {
-        margin: 0 0 6px;
-        font-size: 18px;
-        line-height: 1.2;
-      }
-      .section-head p {
-        margin: 0;
-        color: #97a6bb;
-        font-size: 13px;
-        line-height: 1.5;
-      }
-      .operation {
-        padding: 16px;
-        border: 1px solid rgba(47, 125, 244, .32);
-        border-radius: 8px;
-        background: linear-gradient(180deg, rgba(47, 125, 244, .14), rgba(20, 28, 40, .85));
-      }
-      .operation h3 {
-        margin: 0 0 12px;
-        font-size: 17px;
-      }
-      .app .primary {
-        min-width: 146px;
-        min-height: 44px;
-        height: 44px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        border: 1px solid #65a4ff;
-        border-radius: 8px;
-        color: #ffffff;
-        background: linear-gradient(180deg, #5ca0ff 0%, #2f7df4 100%);
-        box-shadow: 0 10px 24px rgba(47, 125, 244, .28);
-        font-weight: 900;
-      }
-      .ghost {
-        min-height: 34px;
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 0 10px;
-        border: 1px solid #344050;
-        border-radius: 8px;
-        color: #cbd6e6;
-        background: #111820;
-        font-size: 13px;
-        font-weight: 750;
-        box-shadow: none;
-      }
-      .ghost.connect {
-        color: #dffaff;
-        border-color: rgba(53, 212, 238, .42);
-        background: rgba(53, 212, 238, .08);
-      }
-      .ghost.danger {
-        min-width: 128px;
-        height: 40px;
-        justify-content: center;
-        color: #ffdede;
-        border-color: rgba(255, 107, 107, .38);
-        background: rgba(255, 107, 107, .08);
-      }
-      .app .primary svg,
-      .ghost svg {
-        width: 17px;
-        height: 17px;
-        stroke: currentColor;
-        stroke-width: 2.2;
-        fill: none;
-      }
-      .secondary-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-      .app .panel {
-        padding: 16px;
-      }
-      .stack {
-        display: grid;
-        gap: 12px;
-      }
-      .row {
-        display: grid;
-        grid-template-columns: 22px minmax(0, 1fr) auto;
-        gap: 10px;
-        align-items: center;
-        min-height: 52px;
-        padding: 11px;
-        border: 1px solid rgba(165, 190, 230, .12);
-        border-radius: 8px;
-        background: #151d28;
-      }
-      .row b {
-        display: block;
-        margin-bottom: 3px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .row span,
-      .row code {
-        color: #97a6bb;
-        font-family: inherit;
-        font-size: 12px;
-      }
-      .bottom {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, .48fr);
-        gap: 14px;
-      }
-      .url-list {
-        display: grid;
-        gap: 8px;
-      }
-      .url-item {
-        display: grid;
-        grid-template-columns: 84px minmax(0, 1fr) auto auto;
-        gap: 10px;
-        align-items: center;
-        padding: 10px 0;
-        border-bottom: 1px solid rgba(165, 190, 230, .12);
-      }
-      .url-item:last-child {
-        border-bottom: 0;
-      }
-      .url-item span {
-        color: #97a6bb;
-        font-size: 12px;
-      }
-      .url-item code {
-        overflow: hidden;
-        color: #cbd6e6;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-family: inherit;
-        font-size: 13px;
-      }
-      .log {
-        height: 138px;
-        overflow: auto;
-        padding: 12px;
-        border: 1px solid rgba(165, 190, 230, .12);
-        border-radius: 8px;
-        color: #9fb0c8;
-        background: #080d12;
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 12px;
-        line-height: 1.7;
-      }
-      .flash {
-        min-height: 20px;
-        margin: 0;
-        color: #97a6bb;
-        font-size: 13px;
-      }
-      @media (max-width: 860px) {
-        .app { padding: 16px; }
-        .app .topbar,
-        .main-grid,
-        .bottom {
-          grid-template-columns: 1fr;
-        }
-        .status-line {
-          justify-content: flex-start;
-        }
-        .summary {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-      }
-      @media (max-width: 560px) {
-        .app { padding: 12px; }
-        .summary { grid-template-columns: 1fr; }
-        .row,
-        .url-item { grid-template-columns: 1fr; }
-        .app .primary { width: 100%; }
-        .account-metric { grid-template-columns: 1fr; }
-        .metric-action { justify-self: start; }
-      }
-    </style>
-  </head>
-  <body>
-    <main class="app">
-      <header class="topbar">
-        <div class="brand">
-          <div class="mark">TB</div>
-          <div>
-            <h1>Token BI 控制台</h1>
-            <p class="subtitle">本机服务和副屏看板入口保持在同一个工作台。</p>
-          </div>
-        </div>
-        <div class="status-line">
-          <span class="status-pill" id="serverPill"><i class="v102-dot" id="serverIcon"></i><span id="serverState">检查中</span></span>
-          <button id="serviceActionBtn" class="ghost danger">
-            <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
-            <span id="serviceActionLabel">关闭服务</span>
-          </button>
-        </div>
-      </header>
-
-      <section class="summary">
-        <article class="metric account-metric">
-          <div>
-            <span>当前账号</span>
-            <strong id="accountState">暂无账号</strong>
-            <small id="accountStatus">检查中</small>
-          </div>
-          <button id="accountActionBtn" class="metric-action"><span id="accountActionLabel">登录账号</span></button>
-        </article>
-        <article class="metric">
-          <span>数据源</span>
-          <strong id="dataSourceValue">检查中</strong>
-          <small id="dataSourceState">等待同步</small>
-        </article>
-        <article class="metric">
-          <span>看板入口</span>
-          <strong id="dashboardPort">--</strong>
-          <small id="dashboardState">状态检查中</small>
-        </article>
-        <article class="metric">
-          <span>最近同步</span>
-          <strong id="lastRefreshValue">--</strong>
-          <small id="lastRefreshState">状态检查中</small>
-        </article>
-      </section>
-
-      <section class="main-grid">
-        <article class="action-panel">
-          <div class="section-head">
-            <div><h2>快捷操作</h2></div>
-          </div>
-          <div class="operation">
-            <h3 id="operationTitle">打开副屏看板</h3>
-            <button id="openDashboardBtn" class="primary">
-              <svg viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8" /></svg>
-              <span id="primaryActionLabel">打开看板</span>
-            </button>
-          </div>
-          <div class="secondary-actions">
-            <button id="pairDeviceBtn" class="ghost connect">
-              <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v6h-6v-2h4zM14 18h2v2h-2z" /></svg>
-              扫码连接副屏
-            </button>
-            <button id="refreshBtn" class="ghost">
-              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" /></svg>
-              刷新状态
-            </button>
-          </div>
-          <div class="flash" id="flash"></div>
-        </article>
-
-        <article class="panel">
-          <div class="section-head">
-            <div>
-              <h2>服务状态</h2>
-              <p>运维信息保留，但视觉上低于主操作。</p>
-            </div>
-          </div>
-          <div class="stack">
-            <div class="row" id="sidecarRow">
-              <i class="v102-dot"></i>
-              <div><b>控制台 sidecar</b><span id="sidecarDetail">127.0.0.1:8790 · healthy</span></div>
-              <code>运行中</code>
-            </div>
-            <div class="row" id="mainServiceRow">
-              <i class="v102-dot" id="mainServiceDot"></i>
-              <div><b>主服务</b><span id="mainServiceDetail">检查中</span></div>
-              <code id="mainServiceState">检查中</code>
-            </div>
-            <div class="row warn" id="loginRow">
-              <i class="v102-dot warn"></i>
-              <div><b>登录窗口</b><span>仅登录时拉起，用完自动弱化</span></div>
-              <code id="loginState">待命</code>
-            </div>
-            <div class="row idle" id="logRow">
-              <i class="v102-dot idle"></i>
-              <div><b>运行日志</b><span>异常时提升为可见入口</span></div>
-              <code id="logLineCount">-- 行</code>
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <section class="bottom">
-        <article class="panel">
-          <div class="section-head">
-            <div>
-              <h2>副屏入口</h2>
-              <p>保留本机、固定主机名和局域网地址，便于不同设备打开。</p>
-            </div>
-          </div>
-          <div class="url-list">
-            <div class="url-item"><span>本机</span><code id="localUrl">--</code><button class="ghost" data-open="local">打开</button></div>
-            <div class="url-item"><span>固定地址</span><code id="fixedUrl">--</code><button class="ghost" data-copy="fixed">复制</button><button class="ghost" data-open="fixed">打开</button></div>
-            <div class="url-item"><span>局域网</span><code id="lanUrl">--</code><button class="ghost" data-copy="lan">复制</button><button class="ghost" data-open="lan">打开</button></div>
-          </div>
-        </article>
-        <article class="panel">
-          <div class="section-head">
-            <div>
-              <h2>最近日志</h2>
-              <p>默认只展示摘要。</p>
-            </div>
-          </div>
-          <pre id="logTail" class="log">加载日志中...</pre>
-        </article>
-      </section>
-    </main>
-    <div id="pairModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
-      <section class="modal">
-        <div class="modal-head">
-          <div>
-            <h2 id="pairTitle" class="modal-title">扫码连接副屏</h2>
-            <p class="modal-sub">让闲置手机、平板或旧电脑连接到和 Mac 相同的 Wi-Fi 后，用系统相机或浏览器扫码打开看板。</p>
-          </div>
-          <button id="closePairModal" class="secondary close-button" aria-label="关闭扫码连接弹窗">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6 6 18"/></svg>
-          </button>
-        </div>
-        <div id="pairWarning" class="pair-warning"></div>
-        <div class="qr-grid">
-          <article class="qr-card primary-qr" id="fixedQrCard">
-            <div class="qr-title">固定入口 <span class="pill">推荐</span></div>
-            <div class="qr-box"><img id="fixedQr" alt="固定入口二维码" /></div>
-            <div class="qr-url" id="fixedQrUrl">--</div>
-            <div class="qr-actions">
-              <button class="icon-button" data-copy="fixed"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
-              <button class="icon-button" data-open="fixed"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开</button>
-            </div>
-          </article>
-          <article class="qr-card" id="lanQrCard">
-            <div class="qr-title">局域网入口 <span class="pill">备用</span></div>
-            <div class="qr-box"><img id="lanQr" alt="局域网入口二维码" /></div>
-            <div class="qr-url" id="lanQrUrl">--</div>
-            <div class="qr-actions">
-              <button class="icon-button" data-copy="lan"><svg class="icon" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button>
-              <button class="icon-button" data-open="lan"><svg class="icon" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="m10 14 10-10"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>打开</button>
-            </div>
-          </article>
-        </div>
-        <p class="qr-hint">如果固定入口无法打开，通常是设备或路由器不支持 `.local` 解析，请改扫局域网入口。若仍无法访问，检查 Mac 防火墙、路由器客户端隔离，以及 Token BI 主服务是否已启动。</p>
-      </section>
-    </div>
-    <script>
-      let latestUrls = {};
-      let latestRunning = false;
-      let primaryAction = 'dashboard';
-
-      async function readStatus() {
-        const res = await fetch('/api/status');
-        return await res.json();
-      }
-
-      function renderStatus(payload) {
-        const serverState = document.getElementById('serverState');
-        const serverPill = document.getElementById('serverPill');
-        const accountState = document.getElementById('accountState');
-        const accountStatus = document.getElementById('accountStatus');
-        const dataSourceValue = document.getElementById('dataSourceValue');
-        const dataSourceState = document.getElementById('dataSourceState');
-        const dashboardPort = document.getElementById('dashboardPort');
-        const dashboardState = document.getElementById('dashboardState');
-        const lastRefreshValue = document.getElementById('lastRefreshValue');
-        const lastRefreshState = document.getElementById('lastRefreshState');
-        const operationTitle = document.getElementById('operationTitle');
-        const primaryActionLabel = document.getElementById('primaryActionLabel');
-        const mainServiceDetail = document.getElementById('mainServiceDetail');
-        const mainServiceState = document.getElementById('mainServiceState');
-        const mainServiceDot = document.getElementById('mainServiceDot');
-        const loginState = document.getElementById('loginState');
-        const logLineCount = document.getElementById('logLineCount');
-        const fixedUrl = document.getElementById('fixedUrl');
-        const lanUrl = document.getElementById('lanUrl');
-        const localUrl = document.getElementById('localUrl');
-        const logTail = document.getElementById('logTail');
-        const serverIcon = document.getElementById('serverIcon');
-        const serviceActionBtn = document.getElementById('serviceActionBtn');
-        const serviceActionLabel = document.getElementById('serviceActionLabel');
-        const accountActionLabel = document.getElementById('accountActionLabel');
-
-        latestUrls = payload.urls || {};
-        latestRunning = Boolean(payload.running);
-        primaryAction = payload.account ? 'dashboard' : 'account';
-
-        serverState.textContent = payload.running ? '服务运行中' : '服务已停止';
-        serverPill.className = 'status-pill' + (payload.running ? '' : ' warn');
-        serverIcon.className = 'v102-dot' + (payload.running ? '' : ' warn');
-        dashboardPort.textContent = payload.port || '--';
-        dashboardState.textContent = payload.running ? '局域网已就绪' : '服务启动后可用';
-        mainServiceDetail.textContent = `0.0.0.0:${payload.port || '--'} · ${payload.running ? 'dashboard ready' : 'waiting'}`;
-        mainServiceState.textContent = payload.running ? '运行中' : '已停止';
-        mainServiceDot.className = 'v102-dot' + (payload.running ? '' : ' idle');
-
-        if (payload.account) {
-          accountState.textContent = payload.account.masked_email || payload.account.account_id || '已登录';
-          accountStatus.textContent = payload.account.status || 'active';
-          loginState.textContent = '待命';
-        } else {
-          accountState.textContent = '暂无账号';
-          accountStatus.textContent = '需要登录';
-          loginState.textContent = '需要登录';
-        }
-        const dataSourceCopy = payload.data_source_status || '数据源：等待同步';
-        dataSourceValue.textContent = payload.account ? 'OAuth' : '等待登录';
-        dataSourceState.textContent = dataSourceCopy.replace(/^数据源：/, '');
-        serviceActionLabel.textContent = payload.service_action_label || (payload.running ? '关闭服务' : '开启服务');
-        serviceActionBtn.className = payload.running ? 'ghost danger' : 'primary';
-        accountActionLabel.textContent = payload.account_action_label || '登录账号';
-        operationTitle.textContent = payload.account ? '打开副屏看板' : '登录账号';
-        primaryActionLabel.textContent = payload.account ? '打开看板' : '登录账号';
-        const now = new Date();
-        lastRefreshValue.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        lastRefreshState.textContent = payload.account ? '状态已刷新' : '等待登录后同步';
-
-        fixedUrl.textContent = payload.urls.fixed || '不可用';
-        lanUrl.textContent = payload.urls.lan || '不可用';
-        localUrl.textContent = payload.urls.local || '不可用';
-        const logText = payload.log_tail || 'No server log yet.';
-        logTail.textContent = logText;
-        logLineCount.textContent = `${logText.split('\\n').filter(Boolean).length} 行`;
-      }
-
-      function refreshQrCard(kind, imageId, urlId) {
-        const image = document.getElementById(imageId);
-        const label = document.getElementById(urlId);
-        const url = latestUrls[kind] || '';
-        label.textContent = url || '当前入口不可用';
-        if (url) {
-          image.removeAttribute('hidden');
-          image.src = `/api/qrcode?kind=${encodeURIComponent(kind)}&t=${Date.now()}`;
-        } else {
-          image.setAttribute('hidden', 'hidden');
-          image.removeAttribute('src');
-        }
-      }
-
-      function openPairModal() {
-        refreshQrCard('fixed', 'fixedQr', 'fixedQrUrl');
-        refreshQrCard('lan', 'lanQr', 'lanQrUrl');
-        const warning = document.getElementById('pairWarning');
-        warning.textContent = latestRunning
-          ? '扫码后会打开当前 Mac 提供的看板入口。请保持 Token BI 运行。'
-          : 'Token BI 主服务当前未启动。可以先扫码保存入口，但设备打开时会显示无法连接。';
-        document.getElementById('pairModal').classList.remove('hidden');
-      }
-
-      function closePairModal() {
-        document.getElementById('pairModal').classList.add('hidden');
-      }
-
-      async function postAction(path) {
-        const flash = document.getElementById('flash');
-        flash.textContent = '处理中...';
-        const res = await fetch(path, { method: 'POST' });
-        const payload = await res.json();
-        flash.textContent = payload.message || '完成';
-        await refreshStatus();
-      }
-
-      async function copyUrl(kind) {
-        const value = latestUrls[kind];
-        const flash = document.getElementById('flash');
-        if (!value) {
-          flash.textContent = '当前入口不可用。';
-          return;
-        }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(value);
-        } else {
-          const textarea = document.createElement('textarea');
-          textarea.value = value;
-          textarea.style.position = 'fixed';
-          textarea.style.opacity = '0';
-          document.body.appendChild(textarea);
-          textarea.select();
-          document.execCommand('copy');
-          textarea.remove();
-        }
-        flash.textContent = '已复制入口：' + value;
-      }
-
-      async function openUrl(kind) {
-        const value = latestUrls[kind];
-        const flash = document.getElementById('flash');
-        if (!value) {
-          flash.textContent = '当前入口不可用。';
-          return;
-        }
-        await postAction('/api/open-url?kind=' + encodeURIComponent(kind));
-      }
-
-      async function refreshStatus() {
-        const payload = await readStatus();
-        renderStatus(payload);
-      }
-
-      document.getElementById('serviceActionBtn').addEventListener('click', () => postAction('/api/service-action'));
-      document.getElementById('accountActionBtn').addEventListener('click', () => postAction('/api/account-action'));
-      document.getElementById('openDashboardBtn').addEventListener('click', () => {
-        if (primaryAction === 'account') {
-          postAction('/api/account-action');
-          return;
-        }
-        postAction('/api/open-dashboard');
-      });
-      document.getElementById('pairDeviceBtn').addEventListener('click', openPairModal);
-      document.getElementById('closePairModal').addEventListener('click', closePairModal);
-      document.getElementById('refreshBtn').addEventListener('click', () => postAction('/api/refresh-status'));
-      document.getElementById('pairModal').addEventListener('click', (event) => {
-        if (event.target.id === 'pairModal') {
-          closePairModal();
-        }
-      });
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          closePairModal();
-        }
-      });
-      document.querySelectorAll('[data-copy]').forEach((button) => {
-        button.addEventListener('click', () => copyUrl(button.dataset.copy));
-      });
-      document.querySelectorAll('[data-open]').forEach((button) => {
-        button.addEventListener('click', () => openUrl(button.dataset.open));
-      });
-
-      refreshStatus();
-      setInterval(refreshStatus, 5000);
-    </script>
-  </body>
-</html>
-"""
+CONTROL_PANEL_HTML_PATH = Path(__file__).with_name("control_panel.html")
+HTML = CONTROL_PANEL_HTML_PATH.read_text(encoding="utf-8")
 
 
 class ControlPanelHandler(BaseHTTPRequestHandler):

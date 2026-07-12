@@ -1,5 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -7,160 +7,152 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Token BI" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#0c111b" />
+    <meta name="theme-color" content="#101720" />
     <link rel="manifest" href="{{ url_for('static', path='site.webmanifest') }}" />
-    <title>Token BI</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260524-svg-circumference-fix" />
+    <title>Token BI 额度看板</title>
+    <script>
+      (function () {
+        var requested = new URLSearchParams(window.location.search).get("theme");
+        var prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.className = requested === "light" || (!requested && prefersLight)
+          ? "theme-light"
+          : "theme-dark";
+      })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260712-console-dashboard-ui" />
   </head>
   <body data-dashboard-account-id="{{ selected_account_id or '' }}">
-    <main class="app-shell">
-      <section class="phone-frame{% if accounts|length == 1 %} single-account{% endif %}">
-        <section class="context-strip">
-          <div class="account-display" data-account-pill aria-label="当前账号">
-            <span class="account-icon" aria-hidden="true">TB</span>
+    {% set source_labels = {
+      'oauth': 'OAuth',
+      'cli_rpc': 'CLI RPC',
+      'web_session': 'Web Session',
+      'dom_fallback': 'Web 页面兼容',
+      'local_snapshot': '本地测试数据'
+    } %}
+    <div class="dashboard-shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="account" data-account-pill aria-label="当前账号">
+            <div class="brand-mark" aria-hidden="true">TB</div>
             <div class="account-copy">
-              <strong class="account-display-email" data-account-name>
-                {{ dashboard.account.masked_email if dashboard.account else 'No active account selected' }}
-              </strong>
-              <span>当前账号</span>
+              <div class="account-name" data-account-name>
+                {{ dashboard.account.masked_email if dashboard.account else '未登录' }}
+              </div>
+              <div class="meta-label">当前账号</div>
             </div>
           </div>
-          <div class="source-inline" aria-label="数据源">
-            <span>数据源</span>
-            <span class="service-dot" aria-hidden="true"></span>
-            <strong data-source-label>本机服务</strong>
-          </div>
-          <div class="sync-countdown" aria-label="下次同步">
-            <span>下次同步</span>
-            <strong class="refresh-countdown" data-refresh-countdown>03:00</strong>
-          </div>
-          <a class="refresh-link" data-refresh-link href="/dashboard{% if selected_account_id %}?account_id={{ selected_account_id }}{% endif %}">同步额度</a>
-        </section>
 
-        <section class="dashboard-card">
-          {% if dashboard.account %}
-            <div class="card-head">
-              <div class="card-identity">
-                <p class="card-kicker">Codex Usage</p>
-                <h2>额度看板</h2>
-              </div>
-              <div class="status-stack">
-                <span class="status-chip state-{{ dashboard.state.value }}" data-state-chip>{{ dashboard.state.value.replace('_', ' ') }}</span>
-                <span class="source-chip" data-live-chip>
-                  {{ 'Estimated' if dashboard.summary.is_estimated else 'Live' }}
-                </span>
-              </div>
-            </div>
-          {% else %}
-            <div class="card-head">
-              <div class="card-identity">
-                <p class="card-kicker">Viewing account</p>
-                <h2 data-account-name>No active account selected</h2>
-              </div>
-            </div>
-          {% endif %}
-
-          <div class="support-row" hidden>
-            <p
-              class="updated-at"
-              data-updated-node
-              {% if dashboard.summary.updated_at %}
-                data-updated-at="{{ dashboard.summary.updated_at.isoformat() }}"
-              {% endif %}
-            >
-              {% if dashboard.summary.updated_at %}
-                Updated just now
-              {% else %}
-                Waiting for first refresh
-              {% endif %}
-            </p>
-            <span class="source-note" data-source-note>
-              {{ dashboard.summary.source_type }}
-              {% if dashboard.summary.source_detail and dashboard.summary.source_detail != 'unknown' %}
-                · {{ dashboard.summary.source_detail }}
-              {% endif %}
-            </span>
-          </div>
-
-          {% if dashboard.message %}
-            <div class="message-banner" data-message-banner>{{ dashboard.message }}</div>
-          {% endif %}
-
-          {% if dashboard.metrics %}
-            <div class="metric-list" data-metric-list>
-              {% for metric in dashboard.metrics %}
-                {% set remaining = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
-                {% set ring_circumference = 263.89378290154264 %}
-                {% set metric_angle = remaining * 3.6 %}
-                {% set metric_offset = ring_circumference * (100 - remaining) / 100 %}
-                {% if metric.remaining_pct is none %}
-                  {% set metric_tier = 'tier-unknown' %}
-                {% elif remaining > 75 %}
-                  {% set metric_tier = 'tier-75-plus' %}
-                {% elif remaining > 50 %}
-                  {% set metric_tier = 'tier-50-75' %}
-                {% elif remaining > 25 %}
-                  {% set metric_tier = 'tier-25-50' %}
+          <div class="info-block source-block" aria-label="数据源">
+            <div class="meta-label">数据源</div>
+            <div class="info-value">
+              <span class="health-dot state-{{ dashboard.state.value }}" data-source-dot aria-hidden="true"></span>
+              <span data-source-label>{{ source_labels.get(dashboard.summary.source_type, '等待同步') }}</span>
+              <span class="info-detail" data-source-detail>
+                {% if dashboard.summary.source_detail and dashboard.summary.source_detail != 'unknown' %}
+                  {{ dashboard.summary.source_detail }}
+                {% elif dashboard.summary.updated_at %}
+                  已连接
                 {% else %}
-                  {% set metric_tier = 'tier-25-below' %}
+                  待检查
                 {% endif %}
-                <article
-                  class="metric-card metric-{{ metric.metric_type }} {{ metric_tier }}"
-                  data-metric-card="{{ metric.metric_type }}"
-                  style="--remaining-pct: {{ remaining }}%; --remaining-deg: {{ metric_angle }}deg; --remaining-offset: {{ metric_offset }};"
-                >
-                  <div class="metric-head">
-                    <div>
-                      <h2 class="metric-title" data-metric-title>{{ metric.label }}</h2>
-                    </div>
-                  </div>
-                  <div class="radial-wrap">
-                    <div class="metric-radial" data-metric-radial>
-                      <svg class="metric-radial-svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-                        <circle class="metric-ring-track" cx="50" cy="50" r="42" />
-                        <circle
-                          class="metric-ring-value"
-                          data-metric-ring-value
-                          cx="50"
-                          cy="50"
-                          r="42"
-                          stroke-dasharray="{{ ring_circumference }}"
-                          stroke-dashoffset="{{ metric_offset }}"
-                        />
-                      </svg>
-                      <div class="metric-radial-inner">
-                        {% if metric.remaining_pct is not none %}
-                          <strong data-metric-percent>{{ metric.remaining_pct }}%</strong>
-                        {% else %}
-                          <strong data-metric-percent>--</strong>
-                        {% endif %}
-                        <span>剩余额度</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="quota-footer">
-                    <span
-                      class="reset-copy"
-                      data-reset-copy
-                      {% if metric.reset_at %}
-                        data-reset-at="{{ metric.reset_at.isoformat() }}"
-                      {% endif %}
-                    >
-                      {% if metric.reset_at %}
-                        重置剩余计算中
-                      {% else %}
-                        重置剩余未知
-                      {% endif %}
-                    </span>
-                  </div>
-                </article>
-              {% endfor %}
+              </span>
             </div>
-          {% endif %}
-        </section>
-      </section>
-    </main>
+          </div>
 
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260524-svg-circumference-fix"></script>
+          <div class="info-block sync-block" aria-label="同步状态">
+            <div class="meta-label">下次同步</div>
+            <div class="info-value num refresh-countdown" data-refresh-countdown>03:00</div>
+            <div
+              class="meta-label last-sync-label"
+              data-last-sync
+              {% if dashboard.summary.updated_at %}data-updated-at="{{ dashboard.summary.updated_at.isoformat() }}"{% endif %}
+            >
+              {{ '最近同步：刚刚' if dashboard.summary.updated_at else '等待首次同步' }}
+            </div>
+          </div>
+
+          <button class="sync-button" type="button" data-refresh-link>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 1-2-5" /></svg>
+            <span data-refresh-label>同步额度</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="main">
+        {% if dashboard.message %}
+          <div class="message-banner" data-message-banner>{{ dashboard.message }}</div>
+        {% endif %}
+
+        {% if dashboard.metrics %}
+          <section class="quota-grid{% if dashboard.metrics|length == 1 %} single{% endif %}" data-metric-list>
+            {% for metric in dashboard.metrics %}
+              {% set remaining = metric.remaining_pct if metric.remaining_pct is not none else 0 %}
+              {% set ring_circumference = 263.89378290154264 %}
+              {% set metric_offset = ring_circumference * (100 - remaining) / 100 %}
+              {% if metric.remaining_pct is none %}
+                {% set metric_tier = 'tier-unknown' %}
+              {% elif remaining > 75 %}
+                {% set metric_tier = 'tier-75-plus' %}
+              {% elif remaining > 50 %}
+                {% set metric_tier = 'tier-50-75' %}
+              {% elif remaining > 25 %}
+                {% set metric_tier = 'tier-25-50' %}
+              {% else %}
+                {% set metric_tier = 'tier-25-below' %}
+              {% endif %}
+              <article class="quota-card metric-card metric-{{ metric.metric_type }} {{ metric_tier }}" data-metric-card="{{ metric.metric_type }}">
+                <div class="quota-head"><h2 data-metric-title>{{ metric.label }}</h2></div>
+                <div class="quota-body">
+                  <div
+                    class="metric-radial"
+                    data-metric-radial
+                    role="progressbar"
+                    aria-label="{{ metric.label }}剩余 {{ metric.remaining_pct if metric.remaining_pct is not none else '未知' }}%"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    {% if metric.remaining_pct is not none %}aria-valuenow="{{ metric.remaining_pct }}"{% endif %}
+                  >
+                    <svg class="metric-radial-svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                      <circle class="metric-ring-track" cx="50" cy="50" r="42" />
+                      <circle
+                        class="metric-ring-value"
+                        data-metric-ring-value
+                        cx="50"
+                        cy="50"
+                        r="42"
+                        stroke-dasharray="{{ ring_circumference }}"
+                        stroke-dashoffset="{{ metric_offset }}"
+                      />
+                    </svg>
+                    <div class="metric-radial-inner">
+                      <strong class="num" data-metric-percent>{% if metric.remaining_pct is not none %}{{ metric.remaining_pct }}%{% else %}--{% endif %}</strong>
+                      <span>剩余额度</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="reset-row">
+                  <span>重置剩余</span>
+                  <strong
+                    class="reset-time num"
+                    data-reset-copy
+                    {% if metric.reset_at %}data-reset-at="{{ metric.reset_at.isoformat() }}"{% endif %}
+                  >
+                    {{ '计算中' if metric.reset_at else '未知' }}
+                  </strong>
+                </div>
+              </article>
+            {% endfor %}
+          </section>
+        {% else %}
+          <div class="empty-state" data-empty-state>
+            <strong>等待额度数据</strong>
+            <span>完成账号登录后，Token BI 将展示官方返回的额度窗口。</span>
+          </div>
+        {% endif %}
+      </main>
+    </div>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260712-console-dashboard-ui"></script>
   </body>
 </html>

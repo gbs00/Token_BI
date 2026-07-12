@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from app.models.account import AccountRecord, AccountStatus
-from app.services.scraper_service import ScraperUnavailableError
+from app.services.scraper_service import AnalyticsPageChangedError, ScraperUnavailableError
 from app.services.usage_connectors import (
     CodexCliRpcConnector,
     CodexOAuthConnector,
@@ -253,6 +253,61 @@ def test_oauth_connector_syncs_masked_identity_from_codex_profile_claim(test_set
     assert result.payload["account_masked_email"] == "some****@example.com"
 
 
+def test_oauth_connector_prefers_id_token_identity(test_settings) -> None:
+    account = _build_account(test_settings)
+    auth_path = test_settings.config_dir / "auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": _build_unsigned_jwt({"exp": 4102444800}),
+                    "id_token": _build_unsigned_jwt(
+                        {
+                            "exp": 4102444800,
+                            "email": "current.codex@example.com",
+                        }
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    connector = CodexOAuthConnector(
+        auth_paths=[auth_path],
+        http_get=lambda *_args, **_kwargs: {
+            "rate_limit": {
+                "primary_window": {
+                    "remaining_pct": 73,
+                    "reset_at": "2026-05-23T18:00:00+08:00",
+                    "limit_window_seconds": 18000,
+                }
+            }
+        },
+    )
+
+    result = connector.fetch_usage(account)
+
+    assert result.payload["account_masked_email"] == "curr****@example.com"
+
+
+def test_oauth_connector_reports_expired_auth_as_unavailable(test_settings) -> None:
+    auth_path = test_settings.config_dir / "auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _build_unsigned_jwt({"exp": 1}),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    connector = CodexOAuthConnector(auth_paths=[auth_path])
+
+    assert connector.auth_available() is False
+
+
 def test_oauth_connector_skips_when_auth_file_missing(test_settings) -> None:
     account = _build_account(test_settings)
     connector = CodexOAuthConnector(
@@ -263,6 +318,57 @@ def test_oauth_connector_skips_when_auth_file_missing(test_settings) -> None:
     )
 
     with pytest.raises(ConnectorNotApplicableError):
+        connector.fetch_usage(account)
+
+
+def test_oauth_connector_uses_next_auth_path_when_first_is_unreadable(test_settings) -> None:
+    account = _build_account(test_settings)
+    broken_path = test_settings.config_dir / "broken-auth.json"
+    valid_path = test_settings.config_dir / "valid-auth.json"
+    broken_path.write_text("{", encoding="utf-8")
+    valid_path.write_text(
+        json.dumps({"tokens": {"access_token": "valid-token"}}),
+        encoding="utf-8",
+    )
+    connector = CodexOAuthConnector(
+        auth_paths=[broken_path, valid_path],
+        http_get=lambda *_args, **_kwargs: {
+            "rate_limit": {
+                "primary_window": {
+                    "remaining_pct": 80,
+                    "reset_at": "2026-05-23T18:00:00+08:00",
+                    "limit_window_seconds": 18000,
+                }
+            }
+        },
+    )
+
+    result = connector.fetch_usage(account)
+
+    assert result.payload["windows"][0]["remaining_pct"] == 80
+
+
+def test_malformed_official_reset_time_becomes_source_change(test_settings) -> None:
+    account = _build_account(test_settings)
+    auth_path = test_settings.config_dir / "auth.json"
+    auth_path.write_text(
+        json.dumps({"tokens": {"access_token": "valid-token"}}),
+        encoding="utf-8",
+    )
+    connector = CodexOAuthConnector(
+        auth_paths=[auth_path],
+        http_get=lambda *_args, **_kwargs: {
+            "rate_limit": {
+                "primary_window": {
+                    "remaining_pct": 80,
+                    "reset_at": "not-a-date",
+                    "limit_window_seconds": 18000,
+                }
+            }
+        },
+    )
+
+    with pytest.raises(AnalyticsPageChangedError):
         connector.fetch_usage(account)
 
 

@@ -4,7 +4,13 @@ from datetime import datetime
 
 import pytest
 
-from app.services.scraper_service import AnalyticsPageChangedError, ScraperService, SessionExpiredError
+from app.services.scraper_service import (
+    AnalyticsPageChangedError,
+    PlaywrightTimeoutError,
+    ScraperService,
+    ScraperUnavailableError,
+    SessionExpiredError,
+)
 
 
 class _FakePage:
@@ -271,6 +277,33 @@ def test_scraper_extracts_masked_account_identity_from_json(test_settings) -> No
     assert payload["account_masked_email"] == "some****@example.com"
     assert payload["session_remaining_pct"] == 90
     assert payload["weekly_remaining_pct"] == 97
+
+
+def test_scraper_does_not_treat_generic_network_name_as_account_identity(test_settings) -> None:
+    scraper = ScraperService(test_settings)
+
+    identity = scraper._extract_account_identity(
+        {
+            "directIdentityJsonTexts": [],
+            "networkJsonTexts": ['{"model": {"name": "Lark model"}}'],
+            "scriptJsonTexts": [],
+        },
+        "",
+    )
+
+    assert identity is None
+
+
+def test_live_page_timeout_is_converted_to_scraper_error(test_settings, monkeypatch) -> None:
+    scraper = ScraperService(test_settings)
+
+    def fail(_page):
+        raise PlaywrightTimeoutError("timeout")
+
+    monkeypatch.setattr(scraper, "_collect_page_artifacts", fail)
+
+    with pytest.raises(ScraperUnavailableError, match="timed out"):
+        scraper.fetch_usage_from_page(object())
 
 
 def test_scraper_parses_usage_from_chinese_dom_text(test_settings) -> None:

@@ -4,9 +4,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 runtime/
+config/accounts.json
 node_modules/
 build/
 dist/
 src-tauri/binaries/token-bi-backend-*
+src-tauri/binaries/token-bi-control-*
 src-tauri/target/
 src-tauri/gen/

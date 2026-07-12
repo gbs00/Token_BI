@@ -6,46 +6,137 @@
     <title>Token BI</title>
     <style>
       :root {
-        color: #f4f7ff;
-        background: #101625;
-        font-family: "Avenir Next", "SF Pro Display", sans-serif;
+        color-scheme: dark;
+        --bg: #101720;
+        --surface: #151e2a;
+        --surface-raised: #1a2533;
+        --surface-soft: #111923;
+        --text: #f4f7fb;
+        --muted: #9aa9bd;
+        --border: #2a3747;
+        --accent: #347cf6;
+        --accent-soft: rgba(52, 124, 246, 0.16);
+        --secondary: #66d9ee;
+        --secondary-soft: rgba(102, 217, 238, 0.12);
+        --success: #55d887;
+        --success-soft: rgba(85, 216, 135, 0.14);
+        --warning: #f2c75c;
+        --warning-soft: rgba(242, 199, 92, 0.14);
+        --danger: #f06f72;
+        --danger-soft: rgba(240, 111, 114, 0.14);
+        --neutral: #708198;
+        --gutter: 28px;
+        --font-display: "SF Pro Rounded", "Avenir Next Rounded", "PingFang SC", system-ui, sans-serif;
+        --font-body: "SF Pro Rounded", "PingFang SC", system-ui, sans-serif;
       }
-
-      body {
-        min-height: 100vh;
-        margin: 0;
-        display: grid;
-        place-items: center;
-        background:
-          radial-gradient(circle at top, rgba(102, 215, 239, 0.18), transparent 38%),
-          linear-gradient(180deg, #0d1425 0%, #11131c 100%);
+      *, *::before, *::after { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; min-height: 100vh; color: var(--text); background: var(--bg); font-family: var(--font-body); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+      button { font: inherit; }
+      h1, h2, h3, p { margin: 0; }
+      h1, h2, h3 { font-family: var(--font-display); letter-spacing: 0; }
+      svg { display: block; }
+      .container { width: min(100%, 1480px); margin: 0 auto; padding: 0 var(--gutter); }
+      .topnav { border-bottom: 1px solid var(--border); background: rgba(16, 23, 32, 0.96); }
+      .topnav-inner { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 18px; min-height: 92px; padding-top: 15px; padding-bottom: 15px; }
+      .brand { display: flex; align-items: center; min-width: 0; gap: 14px; }
+      .brand-mark { flex: 0 0 auto; display: grid; place-items: center; width: 48px; height: 48px; border: 1px solid rgba(102, 217, 238, 0.42); border-radius: 13px; background: var(--secondary-soft); color: var(--secondary); font: 800 16px var(--font-display); }
+      .brand h1 { font-size: 26px; line-height: 1.12; }
+      .brand p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+      .overall-status { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 0 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 13px; font-weight: 700; white-space: nowrap; }
+      .status-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--neutral); box-shadow: 0 0 0 5px rgba(112, 129, 152, 0.14); }
+      .status-dot.warning { background: var(--warning); box-shadow: 0 0 0 5px var(--warning-soft); }
+      .status-dot.danger { background: var(--danger); box-shadow: 0 0 0 5px var(--danger-soft); }
+      .status-dot.success { background: var(--success); box-shadow: 0 0 0 5px var(--success-soft); }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--muted); font-size: 14px; font-weight: 700; }
+      .btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+      .workspace { padding-top: 18px; padding-bottom: 28px; }
+      .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+      .card { min-width: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+      .summary-card { min-height: 110px; padding: 16px; }
+      .summary-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .label { color: var(--muted); font-size: 12px; }
+      .summary-value { overflow: hidden; margin-top: 10px; font-size: 22px; font-weight: 750; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+      .summary-note { margin-top: 7px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .main-grid { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 14px; margin-top: 14px; }
+      .panel { padding: 20px; }
+      .panel-head { margin-bottom: 16px; }
+      .panel h2 { font-size: 19px; }
+      .panel-sub { margin-top: 4px; color: var(--muted); font-size: 12px; }
+      .action-hero { padding: 18px; border-radius: 12px; background: var(--surface-raised); }
+      .action-hero h3 { font-size: 18px; }
+      .action-hero p { margin-top: 5px; color: var(--muted); font-size: 13px; }
+      .action-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .service-list { display: grid; gap: 8px; }
+      .service-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; min-height: 62px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+      .service-title { font-weight: 700; }
+      .service-meta { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .service-state { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+      .service-state.warning { color: var(--warning); }
+      .service-state.danger { color: var(--danger); }
+      .bottom-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr); gap: 14px; margin-top: 14px; }
+      .address-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .address-item { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+      .address-item strong { display: block; margin-bottom: 5px; font-size: 12px; }
+      .address-item code { display: block; overflow: hidden; color: var(--muted); font: 11px var(--font-body); text-overflow: ellipsis; white-space: nowrap; }
+      .log-preview { display: grid; gap: 8px; }
+      .log-line { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+      .log-line::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--neutral); }
+      .error-copy { margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(240, 111, 114, 0.35); border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 13px; }
+      .hidden { display: none; }
+      @media (max-width: 1020px) {
+        .topnav-inner { grid-template-columns: minmax(0, 1fr) auto; }
+        .overall-status { grid-column: 1 / -1; }
+        .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .main-grid, .bottom-grid { grid-template-columns: 1fr; }
       }
-
-      .card {
-        width: min(420px, calc(100vw - 48px));
-        border: 1px solid rgba(255, 255, 255, 0.09);
-        border-radius: 24px;
-        padding: 28px;
-        background: rgba(24, 30, 45, 0.92);
-        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
-      }
-
-      h1 {
-        margin: 0 0 10px;
-        font-size: 32px;
-      }
-
-      p {
-        margin: 0;
-        color: #aab5ca;
-        line-height: 1.6;
+      @media (max-width: 680px) {
+        :root { --gutter: 12px; }
+        .topnav-inner { grid-template-columns: 1fr; }
+        .brand p { display: none; }
+        .topnav-inner > .btn { width: 100%; }
+        .summary-grid, .address-list { grid-template-columns: 1fr; }
+        .action-buttons { display: grid; grid-template-columns: 1fr; }
+        .btn { width: 100%; }
       }
     </style>
   </head>
   <body>
-    <section class="card">
-      <h1>Token BI</h1>
-      <p>控制台入口由 Token BI App 自动打开。若你看到此页面，请重新打开 App 或查看运行日志。</p>
-    </section>
+    <div class="app-shell">
+      <header class="topnav">
+        <div class="container topnav-inner">
+          <div class="brand"><div class="brand-mark">TB</div><div><h1>Token BI 控制台</h1><p>本机服务与副屏看板入口保持在同一个工作台。</p></div></div>
+          <div class="overall-status" id="controlState" role="status"><span class="status-dot warning" id="controlDot"></span><span id="controlStateText">正在准备本地服务</span></div>
+          <button class="btn" disabled><svg viewBox="0 0 24 24"><path d="m9 7 8 5-8 5z" /></svg>正在准备</button>
+        </div>
+      </header>
+      <main class="container workspace">
+        <section class="summary-grid">
+          <article class="card summary-card"><div class="summary-head"><span class="label">当前账号</span></div><div class="summary-value">正在检查</div><div class="summary-note">等待账号状态</div></article>
+          <article class="card summary-card"><div class="summary-head"><span class="label">数据源</span></div><div class="summary-value">等待同步</div><div class="summary-note">正在准备 OAuth / CLI RPC / Web Session</div></article>
+          <article class="card summary-card"><div class="summary-head"><span class="label">看板端口</span></div><div class="summary-value">8787</div><div class="summary-note">服务启动后可用</div></article>
+          <article class="card summary-card"><div class="summary-head"><span class="label">最近同步</span></div><div class="summary-value">--:--</div><div class="summary-note">等待首次同步</div></article>
+        </section>
+        <section class="main-grid">
+          <article class="card panel"><div class="panel-head"><h2>快捷操作</h2><p class="panel-sub">控制服务就绪后即可使用。</p></div><div class="action-hero"><h3>打开副屏看板</h3><p>正在准备副屏入口。</p><div class="action-buttons"><button class="btn" disabled>打开看板</button><button class="btn" disabled>扫码连接副屏</button><button class="btn" disabled>刷新状态</button></div></div><div class="error-copy hidden" id="startupError"></div></article>
+          <article class="card panel"><div class="panel-head"><h2>服务状态</h2><p class="panel-sub">核心结果优先，技术信息保留给排障。</p></div><div class="service-list"><div class="service-row"><span class="status-dot warning" id="sidecarDot"></span><div><div class="service-title">控制台 sidecar</div><div class="service-meta" id="sidecarMeta">127.0.0.1:8790 · starting</div></div><span class="service-state warning" id="sidecarState">启动中</span></div><div class="service-row"><span class="status-dot"></span><div><div class="service-title">主服务</div><div class="service-meta">0.0.0.0:8787 · waiting</div></div><span class="service-state">待命</span></div></div></article>
+        </section>
+        <section class="bottom-grid"><article class="card panel"><div class="panel-head"><h2>副屏入口</h2><p class="panel-sub">控制服务就绪后将显示实际地址。</p></div><div class="address-list"><div class="address-item"><strong>本机地址</strong><code>http://127.0.0.1:8787</code></div><div class="address-item"><strong>局域网地址</strong><code>正在检查</code></div><div class="address-item"><strong>固定地址</strong><code>正在检查</code></div></div></article><article class="card panel"><div class="panel-head"><h2>最近日志</h2><p class="panel-sub">启动过程摘要。</p></div><div class="log-preview"><div class="log-line"><span>正在启动控制服务</span><span>进行中</span></div></div></article></section>
+      </main>
+    </div>
+    <script>
+      window.__TOKEN_BI_BOOTSTRAP__ = {
+        fail: function fail(error) {
+          var detail = error && error.detail ? error.detail : "本地控制服务未能正常启动。";
+          document.getElementById("controlStateText").textContent = error && error.title ? error.title : "本地服务启动失败";
+          document.getElementById("controlDot").className = "status-dot danger";
+          document.getElementById("sidecarDot").className = "status-dot danger";
+          document.getElementById("sidecarMeta").textContent = detail;
+          document.getElementById("sidecarState").textContent = "失败";
+          document.getElementById("sidecarState").className = "service-state danger";
+          document.getElementById("startupError").textContent = detail;
+          document.getElementById("startupError").classList.remove("hidden");
+        }
+      };
+    </script>
   </body>
 </html>

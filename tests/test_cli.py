@@ -5,15 +5,15 @@ from pathlib import Path
 from app.main import create_app
 from app.cli import build_parser
 from scripts import control_panel
+from scripts.control_cli import build_parser as build_control_parser
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_VERSION = "1.0.2"
 
 
-def test_cli_has_control_panel_command():
-    args = build_parser().parse_args(["control-panel", "--port", "8790"])
-    assert args.command == "control-panel"
+def test_control_cli_has_control_panel_arguments():
+    args = build_control_parser().parse_args(["--port", "8790"])
     assert args.port == 8790
 
 
@@ -32,8 +32,9 @@ def test_control_panel_backend_command_uses_module_in_dev(monkeypatch):
 
 
 def test_control_panel_backend_command_uses_executable_when_frozen(monkeypatch):
-    monkeypatch.setattr(control_panel.sys, "executable", "/tmp/token-bi-backend")
+    monkeypatch.setattr(control_panel.sys, "executable", "/tmp/token-bi-control")
     monkeypatch.setattr(control_panel.sys, "frozen", True, raising=False)
+    monkeypatch.delenv("TOKEN_BI_MAIN_BACKEND_BIN", raising=False)
 
     assert control_panel._backend_command(["health"]) == ["/tmp/token-bi-backend", "health"]
 

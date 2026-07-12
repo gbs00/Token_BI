@@ -51,6 +51,17 @@ def test_create_and_list_accounts_api(app) -> None:
     assert items[0]["account_alias"] == "guo****@gmail.com"
 
 
+def test_main_health_identifies_service_and_process(app) -> None:
+    response = TestClient(app).get("/api/v1/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["service"] == "token-bi-main-service"
+    assert payload["pid"] > 0
+    assert payload["port"] == 8787
+
+
 def test_create_account_without_masked_email_uses_pending_placeholder(app) -> None:
     client = TestClient(app)
     response = client.post("/api/v1/accounts", json={})
@@ -156,6 +167,29 @@ def test_account_session_login_creates_pending_account_and_opens_worker(app) -> 
     assert captured["account_id"] == payload["account"]["account_id"]
 
 
+def test_account_session_login_reuses_single_existing_account(app) -> None:
+    client = TestClient(app)
+    existing = client.post(
+        "/api/v1/accounts",
+        json={"masked_email": "user****@example.com"},
+    ).json()["account"]
+    app.state.container.account_service.update_account_status(existing["account_id"], "active")
+
+    app.state.container.browser_worker_service.start_login_session = (
+        lambda account_id, context_dir, target_url=None: BrowserSessionSnapshot(
+            account_id=account_id,
+            state=BrowserSessionState.AWAITING_LOGIN,
+            context_dir=str(context_dir),
+        )
+    )
+
+    response = client.post("/api/v1/account-session/login")
+
+    assert response.status_code == 200
+    assert response.json()["account"]["account_id"] == existing["account_id"]
+    assert len(app.state.container.account_service.list_accounts()) == 1
+
+
 def test_account_session_logout_closes_worker_deletes_account_and_profile(app) -> None:
     client = TestClient(app)
     account = client.post(
@@ -199,6 +233,26 @@ def test_diagnostics_returns_actionable_copy_for_common_states(app) -> None:
     assert "web_session_available" in codes
     assert "last_connector_error" in codes
     assert all(item["title"] and item["next_step"] for item in payload["items"])
+    by_code = {item["code"]: item for item in payload["items"]}
+    assert by_code["oauth_connector_ready"]["severity"] == "warning"
+    assert by_code["cli_rpc_connector_ready"]["severity"] == "warning"
+
+
+def test_runtime_status_reports_only_last_successful_usage(app) -> None:
+    client = TestClient(app)
+    account_id = _create_account_with_context(app)
+
+    before = client.get("/api/v1/runtime-status").json()
+    assert before["service"] == "token-bi-main-service"
+    assert before["usage"] is None
+
+    client.post(f"/api/v1/dashboard/refresh?account_id={account_id}")
+    after = client.get("/api/v1/runtime-status").json()
+
+    assert after["account"]["account_id"] == account_id
+    assert after["usage"]["state"] == "ready"
+    assert after["usage"]["source_type"] == "local_snapshot"
+    assert after["usage"]["updated_at"] == "2026-04-21T23:00:00+08:00"
 
 
 def test_service_startup_does_not_launch_browser_worker_for_active_accounts(container) -> None:

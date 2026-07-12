@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from app.models.account import AccountRecord, AccountStatus, CreateAccountRequest
@@ -56,16 +55,19 @@ class UsageService:
             cached = self._cache_service.get(cache_key)
             if cached is not None:
                 return cached
-        else:
-            self._cache_service.clear(cache_key)
 
-        if not force_refresh and account.status in {AccountStatus.PENDING, AccountStatus.INVALID}:
+        explicit_account_requested = account_id is not None
+        if (
+            explicit_account_requested
+            and not force_refresh
+            and account.status in {AccountStatus.PENDING, AccountStatus.INVALID}
+        ):
             return self._build_reauth_required(
                 account=account,
                 message="Start the live browser worker on Mac and complete the first Codex login.",
             )
 
-        if not force_refresh and account.status == AccountStatus.EXPIRED:
+        if explicit_account_requested and not force_refresh and account.status == AccountStatus.EXPIRED:
             return self._build_reauth_required(
                 account=account,
                 message="Live browser session expired on Mac. Please sign in again and keep the worker running.",
@@ -74,9 +76,25 @@ class UsageService:
         try:
             connector_result = self._connector_manager.fetch_usage(account)
         except LiveSessionRequiredError as exc:
+            stale = self._build_stale_from_cache(
+                cache_key=cache_key,
+                account=account,
+                message=str(exc),
+                state=PageState.REAUTH_REQUIRED,
+            )
+            if stale is not None:
+                return stale
             return self._build_reauth_required(account=account, message=str(exc))
         except SessionExpiredError as exc:
             self._account_service.update_account_status(account.account_id, status="expired")
+            stale = self._build_stale_from_cache(
+                cache_key=cache_key,
+                account=account,
+                message=str(exc),
+                state=PageState.REAUTH_REQUIRED,
+            )
+            if stale is not None:
+                return stale
             return self._build_reauth_required(account=account, message=str(exc))
         except AnalyticsPageChangedError as exc:
             stale = self._build_stale_from_cache(
@@ -129,11 +147,33 @@ class UsageService:
             if updated_account is not None:
                 account = updated_account
                 payload = payload.model_copy(update={"account": updated_account})
+        if not payload.metrics:
+            message = "官方返回的额度窗口暂不支持展示。"
+            stale = self._build_stale_from_cache(
+                cache_key=cache_key,
+                account=account,
+                message=message,
+                state=PageState.SOURCE_CHANGED,
+            )
+            if stale is not None:
+                return stale
+            return payload.model_copy(
+                update={
+                    "state": PageState.SOURCE_CHANGED,
+                    "message": message,
+                }
+            )
         self._cache_service.set(cache_key, payload)
         return payload
 
     def refresh_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
         return self.get_dashboard(account_id=account_id, force_refresh=True)
+
+    def get_cached_dashboard(self, account_id: Optional[str] = None) -> Optional[DashboardPayload]:
+        account = self._resolve_account(account_id)
+        if account is None:
+            return None
+        return self._cache_service.get_stale(f"usage:{account.account_id}")
 
     def _resolve_account(self, account_id: Optional[str]) -> Optional[AccountRecord]:
         return self._account_service.preferred_account(account_id)
@@ -196,6 +236,13 @@ class UsageService:
         )
         if updated_account is not None:
             payload = payload.model_copy(update={"account": updated_account})
+        if not payload.metrics:
+            return payload.model_copy(
+                update={
+                    "state": PageState.SOURCE_CHANGED,
+                    "message": "官方返回的额度窗口暂不支持展示。",
+                }
+            )
         self._cache_service.set(f"usage:{account.account_id}", payload)
         return payload
 
@@ -328,24 +375,6 @@ class UsageService:
             except (TypeError, ValueError):
                 return None
         return None
-
-    def _metric_key(self, window: dict, index: int, used_metric_types: set[str]) -> str:
-        legacy_key = window.get("metric_type")
-        if isinstance(legacy_key, str) and legacy_key.strip():
-            base = legacy_key.strip()
-        else:
-            display_name = str(window.get("display_name") or "usage-window")
-            base = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-") or f"window-{index + 1}"
-            duration = window.get("window_seconds") or window.get("window_minutes")
-            if duration is not None:
-                base = f"{base}-{duration}"
-
-        candidate = base
-        suffix = 2
-        while candidate in used_metric_types:
-            candidate = f"{base}-{suffix}"
-            suffix += 1
-        return candidate
 
     def _detail_links(self) -> list[DetailLink]:
         return [

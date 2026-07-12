@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Token BI 额度看板</title>
+  <script>
+    (() => {
+      const requested = new URLSearchParams(location.search).get('theme');
+      const theme = requested || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.classList.add(theme === 'light' ? 'theme-light' : 'theme-dark');
+    })();
+  </script>
+  <style>
+    @property --shown-progress {
+      syntax: "<percentage>";
+      inherits: false;
+      initial-value: 0%;
+    }
+    :root {
+      --bg: oklch(20.9% 0.021 245.8);
+      --surface: oklch(22.8% 0.025 256.5);
+      --fg: oklch(97.6% 0.011 269.6);
+      --muted: oklch(65.9% 0.058 254.6);
+      --border: oklch(32.4% 0.028 250.7);
+      --accent: oklch(63.8% 0.194 261.4);
+      --secondary: oklch(83% 0.115 204.3);
+      --success: oklch(72% 0.17 151);
+      --warning: oklch(81% 0.15 88);
+      --danger: oklch(66% 0.20 25);
+      --on-accent: oklch(100% 0 0);
+      --surface-raised: color-mix(in oklch, var(--surface) 93%, var(--fg));
+      --fg-soft: color-mix(in oklch, var(--fg) 7%, transparent);
+      --accent-soft: color-mix(in oklch, var(--accent) 16%, transparent);
+      --success-soft: color-mix(in oklch, var(--success) 14%, transparent);
+      --track: color-mix(in oklch, var(--border) 72%, var(--surface));
+      --font-display: "SF Pro Rounded", ui-rounded, "Avenir Next Rounded", "PingFang SC", system-ui, sans-serif;
+      --font-body: "SF Pro Rounded", ui-rounded, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --font-mono: "SF Pro Rounded", ui-rounded, "PingFang SC", system-ui, sans-serif;
+      color-scheme: dark;
+    }
+    .theme-light {
+      --bg: oklch(97.5% 0.005 258.3);
+      --surface: oklch(100% 0 0);
+      --fg: oklch(24.5% 0.039 264.4);
+      --muted: oklch(54.4% 0.035 265.1);
+      --border: oklch(91.4% 0.014 258.3);
+      --accent: oklch(63.8% 0.194 261.4);
+      --secondary: oklch(72% 0.13 205);
+      --success: oklch(62% 0.16 151);
+      --warning: oklch(70% 0.15 78);
+      --danger: oklch(58% 0.20 25);
+      --on-accent: oklch(100% 0 0);
+      color-scheme: light;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; cursor: pointer; }
+    button:disabled { cursor: wait; }
+    h1, h2, p { margin: 0; }
+    h1, h2 { font-family: var(--font-display); font-weight: 650; text-wrap: balance; }
+    svg { display: block; }
+    .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .dashboard-shell { min-height: 100vh; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      padding: 14px clamp(14px, 2.4vw, 28px);
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklch, var(--bg) 92%, transparent);
+      backdrop-filter: blur(16px);
+    }
+    .topbar-inner {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto auto auto;
+      align-items: center;
+      gap: clamp(16px, 3vw, 40px);
+      width: min(100%, 1520px);
+      min-height: 68px;
+      margin-inline: auto;
+    }
+    .account {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+    }
+    .brand-mark {
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid color-mix(in oklch, var(--secondary) 42%, var(--border));
+      border-radius: 11px;
+      background: color-mix(in oklch, var(--secondary) 9%, transparent);
+      color: var(--secondary);
+      font: 700 14px var(--font-display);
+      letter-spacing: -0.04em;
+    }
+    .account-copy { min-width: 0; }
+    .account-name { overflow: hidden; font-size: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .meta-label { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .info-block { min-width: 96px; }
+    .info-value { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 14px; font-weight: 650; white-space: nowrap; }
+    .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); }
+    .health-dot.warning { background: var(--warning); box-shadow: 0 0 0 4px color-mix(in oklch, var(--warning) 14%, transparent); }
+    .info-detail { margin-left: 4px; color: var(--muted); font-size: 11px; font-weight: 500; }
+    .sync-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-width: 118px;
+      min-height: 46px;
+      padding: 0 16px;
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      background: var(--accent);
+      color: var(--on-accent);
+      font-weight: 650;
+      transition: transform 100ms ease, background 160ms ease, opacity 160ms ease;
+    }
+    .sync-button svg { width: 17px; height: 17px; }
+    .sync-button:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in oklch, var(--accent) 88%, var(--fg)); }
+    .sync-button:active:not(:disabled) { transform: translateY(0); }
+    .sync-button:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+    .sync-button:disabled { opacity: .72; }
+    .main {
+      width: min(100%, 1320px);
+      margin-inline: auto;
+      padding: clamp(18px, 3vw, 34px) clamp(14px, 2.4vw, 28px) clamp(28px, 4vw, 52px);
+    }
+    .quota-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: clamp(14px, 2vw, 22px);
+    }
+    .quota-grid.single { grid-template-columns: minmax(0, 620px); justify-content: center; }
+    .quota-card {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-width: 0;
+      min-height: clamp(440px, calc(100vh - 176px), 610px);
+      padding: clamp(20px, 2.5vw, 30px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface);
+    }
+    .quota-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .quota-head h2 { font-size: clamp(25px, 2.4vw, 34px); line-height: 1.14; letter-spacing: -0.035em; }
+    .quota-body { display: grid; place-items: center; padding: 20px 0; }
+    .ring {
+      --ring-color: var(--accent);
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: clamp(220px, 25vw, 300px);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: conic-gradient(var(--ring-color) 0 var(--shown-progress), var(--track) var(--shown-progress) 100%);
+      transition: --shown-progress 900ms cubic-bezier(.2, .75, .25, 1);
+    }
+    .ring.cyan { --ring-color: var(--secondary); }
+    .ring::after {
+      content: "";
+      position: absolute;
+      inset: 13%;
+      border-radius: 50%;
+      background: var(--surface);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+    .ring-copy { position: relative; z-index: 1; text-align: center; }
+    .quota-value {
+      color: var(--ring-color);
+      font: 700 clamp(48px, 6vw, 72px)/.95 var(--font-display);
+      letter-spacing: -0.035em;
+    }
+    .quota-label { margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .reset-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 54px;
+      gap: 14px;
+      padding: 0 16px;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: var(--surface-raised);
+    }
+    .reset-row span:first-child { color: var(--muted); font-size: 12px; }
+    .reset-time { font-size: 14px; font-weight: 600; text-align: right; white-space: nowrap; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 40;
+      max-width: min(440px, calc(100% - 28px));
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--fg);
+      box-shadow: 0 18px 48px color-mix(in oklch, var(--fg) 14%, transparent);
+      font-size: 13px;
+      opacity: 0;
+      transform: translate(-50%, 12px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 980px) {
+      .topbar-inner { grid-template-columns: minmax(260px, 1fr) auto auto; row-gap: 10px; }
+      .account { grid-column: 1; grid-row: 1 / span 2; }
+      .source-block { grid-column: 2; }
+      .sync-block { grid-column: 2; grid-row: 2; }
+      .sync-button { grid-column: 3; grid-row: 1 / span 2; }
+      .quota-card { min-height: 500px; }
+    }
+    @media (max-width: 739px) {
+      .topbar { position: static; }
+      .topbar-inner { grid-template-columns: minmax(0, 1fr) auto; gap: 12px 18px; }
+      .account { grid-column: 1 / -1; grid-row: auto; }
+      .source-block { grid-column: 1; grid-row: 2; }
+      .sync-block { grid-column: 1; grid-row: 3; }
+      .sync-button { grid-column: 2; grid-row: 2 / span 2; align-self: stretch; }
+      .quota-grid { grid-template-columns: 1fr; }
+      .quota-card { min-height: 430px; }
+      .ring { width: clamp(205px, 66vw, 270px); }
+    }
+    @media (max-width: 420px) {
+      .topbar-inner { grid-template-columns: 1fr; }
+      .account, .source-block, .sync-block, .sync-button { grid-column: 1; grid-row: auto; }
+      .source-block, .sync-block { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+      .info-block { min-width: 0; }
+      .sync-button { width: 100%; }
+      .main { padding-inline: 10px; }
+      .quota-card { min-height: 410px; padding: 18px; border-radius: 14px; }
+      .ring { width: min(218px, 68vw); }
+      .reset-row { padding-inline: 12px; }
+    }
+    @media (orientation: landscape) and (max-height: 500px) and (min-width: 600px) {
+      .topbar { position: static; padding-block: 8px; }
+      .topbar-inner { min-height: 52px; grid-template-columns: minmax(220px, 1fr) auto auto auto; }
+      .account { grid-column: auto; grid-row: auto; }
+      .source-block, .sync-block, .sync-button { grid-column: auto; grid-row: auto; }
+      .brand-mark { width: 36px; height: 36px; }
+      .main { padding-block: 10px; }
+      .quota-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .quota-card { min-height: 330px; padding: 16px; }
+      .quota-head h2 { font-size: 22px; }
+      .quota-body { padding: 8px 0; }
+      .ring { width: min(190px, 31vh); }
+      .quota-value { font-size: 42px; }
+      .reset-row { min-height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-shell">
+    <header class="topbar" data-od-id="dashboard-header">
+      <div class="topbar-inner">
+        <div class="account" data-od-id="current-account">
+          <div class="brand-mark" aria-hidden="true">TB</div>
+          <div class="account-copy">
+            <div class="account-name">guob*****@gmail.com</div>
+            <div class="meta-label">当前账号</div>
+          </div>
+        </div>
+        <div class="info-block source-block" data-od-id="data-source">
+          <div class="meta-label">数据源</div>
+          <div class="info-value"><span class="health-dot" id="sourceDot"></span><span id="sourceValue">OAuth</span><span class="info-detail" id="sourceDetail">已连接</span></div>
+        </div>
+        <div class="info-block sync-block" data-od-id="sync-status">
+          <div class="meta-label">下次同步</div>
+          <div class="info-value num" id="syncCountdown">01:24</div>
+          <div class="meta-label" id="lastSyncLabel">最近同步：刚刚</div>
+        </div>
+        <button class="sync-button" id="syncButton" data-od-id="sync-usage-button">
+          <svg id="syncIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 1-2-5"/></svg>
+          <span id="syncButtonLabel">同步额度</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="main" data-od-id="usage-dashboard">
+      <section class="quota-grid" id="quotaGrid" data-od-id="quota-cards">
+        <article class="quota-card" data-value="100" data-od-id="quota-card-5h">
+          <div class="quota-head"><h2 data-od-id="quota-title-5h">5h 额度</h2></div>
+          <div class="quota-body">
+            <div class="ring cyan" role="progressbar" aria-label="5h 额度剩余 100%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
+              <div class="ring-copy"><div class="quota-value num">100%</div><div class="quota-label">剩余额度</div></div>
+            </div>
+          </div>
+          <div class="reset-row"><span>重置剩余</span><strong class="reset-time num">3 小时 31 分</strong></div>
+        </article>
+
+        <article class="quota-card" data-value="55" data-od-id="quota-card-weekly">
+          <div class="quota-head"><h2 data-od-id="quota-title-weekly">周额度</h2></div>
+          <div class="quota-body">
+            <div class="ring" role="progressbar" aria-label="周额度剩余 55%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="55">
+              <div class="ring-copy"><div class="quota-value num">55%</div><div class="quota-label">剩余额度</div></div>
+            </div>
+          </div>
+          <div class="reset-row"><span>重置剩余</span><strong class="reset-time num">6 天 4 小时</strong></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const cards = [...document.querySelectorAll('.quota-card')];
+      const syncButton = document.getElementById('syncButton');
+      const syncButtonLabel = document.getElementById('syncButtonLabel');
+      const syncCountdown = document.getElementById('syncCountdown');
+      const sourceDetail = document.getElementById('sourceDetail');
+      const sourceDot = document.getElementById('sourceDot');
+      const toast = document.getElementById('toast');
+      let seconds = 84;
+      let syncing = false;
+      let toastTimer;
+
+      if (params.get('single') === '1' && cards[1]) {
+        cards[1].remove();
+        document.getElementById('quotaGrid').classList.add('single');
+      }
+
+      requestAnimationFrame(() => {
+        document.querySelectorAll('.quota-card').forEach((card) => {
+          card.querySelector('.ring').style.setProperty('--shown-progress', card.dataset.value + '%');
+        });
+      });
+
+      function formatCountdown(value) {
+        const minutes = Math.floor(value / 60).toString().padStart(2, '0');
+        const remainder = (value % 60).toString().padStart(2, '0');
+        return minutes + ':' + remainder;
+      }
+
+      function showToast(message) {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.add('show');
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+      }
+
+      function runSync(automatic) {
+        if (syncing) return;
+        syncing = true;
+        syncButton.disabled = true;
+        syncButtonLabel.textContent = '同步中…';
+        sourceDetail.textContent = '正在同步';
+        syncCountdown.textContent = '更新中';
+        setTimeout(() => {
+          const shouldFail = params.get('sync') === 'error';
+          syncing = false;
+          syncButton.disabled = false;
+          sourceDetail.textContent = shouldFail ? '上次数据' : '已连接';
+          sourceDot.classList.toggle('warning', shouldFail);
+          if (shouldFail) {
+            syncButtonLabel.textContent = '再次同步';
+            seconds = 60;
+            syncCountdown.textContent = formatCountdown(seconds);
+            showToast('同步失败，已保留上次成功数据');
+          } else {
+            syncButtonLabel.textContent = '同步完成';
+            seconds = 180;
+            syncCountdown.textContent = formatCountdown(seconds);
+            document.getElementById('lastSyncLabel').textContent = '最近同步：刚刚';
+            showToast(automatic ? '自动同步完成，额度数据已更新' : '额度已同步，数据源 OAuth');
+            setTimeout(() => { syncButtonLabel.textContent = '同步额度'; }, 1200);
+          }
+        }, 900);
+      }
+
+      syncButton.addEventListener('click', () => runSync(false));
+      setInterval(() => {
+        if (syncing) return;
+        seconds -= 1;
+        if (seconds <= 0) {
+          seconds = 0;
+          runSync(true);
+        } else {
+          syncCountdown.textContent = formatCountdown(seconds);
+        }
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>

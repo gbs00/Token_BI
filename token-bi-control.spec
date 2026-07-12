@@ -2,31 +2,24 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
-
 
 project_root = Path(SPECPATH)
 
-datas = [
-    (str(project_root / "app" / "templates"), "app/templates"),
-    (str(project_root / "app" / "static"), "app/static"),
-]
-
-hiddenimports = (
-    collect_submodules("app")
-    + collect_submodules("uvicorn")
-)
-
 a = Analysis(
-    ["app/cli.py"],
+    ["scripts/control_cli.py"],
     pathex=[str(project_root)],
     binaries=[],
-    datas=datas,
-    hiddenimports=hiddenimports,
+    datas=[(str(project_root / "scripts" / "control_panel.html"), "scripts")],
+    hiddenimports=["qrcode.image.svg"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        "playwright",
+        "pydantic",
+        "starlette",
+        "uvicorn",
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -36,7 +29,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    name="token-bi-backend",
+    name="token-bi-control",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,5 +52,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="token-bi-backend",
+    name="token-bi-control",
 )

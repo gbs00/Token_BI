@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Token BI 控制台</title>
+    <script>
+      (function () {
+        var requested = new URLSearchParams(window.location.search).get("theme");
+        var prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+        document.documentElement.className = requested === "light" || (!requested && prefersLight)
+          ? "theme-light"
+          : "theme-dark";
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101720;
+        --surface: #151e2a;
+        --surface-raised: #1a2533;
+        --surface-soft: #111923;
+        --text: #f4f7fb;
+        --muted: #9aa9bd;
+        --border: #2a3747;
+        --accent: #347cf6;
+        --accent-hover: #4c8bfa;
+        --accent-soft: rgba(52, 124, 246, 0.16);
+        --secondary: #66d9ee;
+        --secondary-soft: rgba(102, 217, 238, 0.12);
+        --success: #55d887;
+        --success-soft: rgba(85, 216, 135, 0.14);
+        --warning: #f2c75c;
+        --warning-soft: rgba(242, 199, 92, 0.14);
+        --danger: #f06f72;
+        --danger-soft: rgba(240, 111, 114, 0.14);
+        --neutral: #708198;
+        --shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+        --radius: 10px;
+        --radius-lg: 14px;
+        --gutter: 28px;
+        --font-display: "SF Pro Rounded", "Avenir Next Rounded", "PingFang SC", system-ui, sans-serif;
+        --font-body: "SF Pro Rounded", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      }
+
+      .theme-light {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --surface: #ffffff;
+        --surface-raised: #f8fafc;
+        --surface-soft: #eef2f7;
+        --text: #253047;
+        --muted: #66758a;
+        --border: #dfe5ed;
+        --accent: #347cf6;
+        --accent-hover: #276be0;
+        --accent-soft: rgba(52, 124, 246, 0.12);
+        --secondary: #2eacc5;
+        --secondary-soft: rgba(46, 172, 197, 0.1);
+        --success: #31a867;
+        --success-soft: rgba(49, 168, 103, 0.12);
+        --warning: #bd871c;
+        --warning-soft: rgba(189, 135, 28, 0.12);
+        --danger: #d14f55;
+        --danger-soft: rgba(209, 79, 85, 0.11);
+        --neutral: #8290a4;
+        --shadow: 0 18px 50px rgba(30, 47, 71, 0.12);
+      }
+
+      *, *::before, *::after { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        color: var(--text);
+        background: var(--bg);
+        font-family: var(--font-body);
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      button { font: inherit; cursor: pointer; }
+      button:disabled { cursor: not-allowed; }
+      h1, h2, h3, p { margin: 0; }
+      h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing: 0; }
+      svg { display: block; }
+      code, .num { font-variant-numeric: tabular-nums; }
+      .app-shell { min-height: 100vh; }
+      .container { width: min(100%, 1480px); margin: 0 auto; padding: 0 var(--gutter); }
+
+      .topnav {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid var(--border);
+        background: rgba(16, 23, 32, 0.96);
+        -webkit-backdrop-filter: blur(16px);
+        backdrop-filter: blur(16px);
+      }
+      .theme-light .topnav { background: rgba(244, 246, 249, 0.96); }
+      .topnav-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 18px;
+        min-height: 92px;
+        padding-top: 15px;
+        padding-bottom: 15px;
+      }
+      .brand { display: flex; align-items: center; min-width: 0; gap: 14px; }
+      .brand-mark {
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        width: 48px;
+        height: 48px;
+        border: 1px solid rgba(102, 217, 238, 0.42);
+        border-radius: 13px;
+        background: var(--secondary-soft);
+        color: var(--secondary);
+        font: 800 16px var(--font-display);
+      }
+      .brand h1 { font-size: 26px; line-height: 1.12; }
+      .brand p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+      .overall-status {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 40px;
+        padding: 0 13px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--neutral);
+        box-shadow: 0 0 0 5px rgba(112, 129, 152, 0.14);
+      }
+      .status-dot.success { background: var(--success); box-shadow: 0 0 0 5px var(--success-soft); }
+      .status-dot.warning { background: var(--warning); box-shadow: 0 0 0 5px var(--warning-soft); }
+      .status-dot.danger { background: var(--danger); box-shadow: 0 0 0 5px var(--danger-soft); }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 16px;
+        border: 1px solid transparent;
+        border-radius: var(--radius);
+        background: transparent;
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 700;
+        transition: transform 100ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease, opacity 160ms ease;
+      }
+      .btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+      .btn:hover:not(:disabled) { transform: translateY(-1px); }
+      .btn:active:not(:disabled) { transform: translateY(0); }
+      .btn:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+      .btn-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+      .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+      .btn-secondary { border-color: var(--border); background: var(--surface); }
+      .btn-secondary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+      .btn-danger { border-color: rgba(240, 111, 114, 0.5); background: var(--danger-soft); color: var(--danger); }
+      .btn-ghost { min-height: 34px; padding: 0 9px; border-color: transparent; color: var(--muted); }
+      .btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--surface-soft); }
+      .btn:disabled { border-color: var(--border); background: var(--surface-soft); color: var(--muted); opacity: 0.62; }
+
+      .workspace { padding-top: 18px; padding-bottom: 28px; }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .card { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+      .summary-card { min-height: 110px; padding: 16px; }
+      .summary-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .label { color: var(--muted); font-size: 12px; }
+      .summary-value {
+        overflow: hidden;
+        margin-top: 10px;
+        font-size: 22px;
+        font-weight: 750;
+        line-height: 1.15;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .summary-note { margin-top: 7px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .mini-action {
+        min-height: 32px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .mini-action:hover { border-color: var(--accent); color: var(--text); }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: var(--success-soft);
+        color: var(--success);
+        font-size: 11px;
+        font-weight: 750;
+      }
+      .pill.warning { background: var(--warning-soft); color: var(--warning); }
+      .pill.danger { background: var(--danger-soft); color: var(--danger); }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+        gap: 14px;
+        margin-top: 14px;
+      }
+      .panel { padding: 20px; }
+      .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+      .panel h2 { font-size: 19px; line-height: 1.25; }
+      .panel-sub { margin-top: 4px; color: var(--muted); font-size: 12px; }
+      .action-hero { padding: 18px; border-radius: 12px; background: var(--surface-raised); }
+      .action-hero h3 { font-size: 18px; }
+      .action-hero p { margin-top: 5px; color: var(--muted); font-size: 13px; }
+      .action-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .action-buttons .btn:first-child { min-width: 138px; }
+      .service-list { display: grid; gap: 8px; }
+      .service-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 13px;
+        min-height: 62px;
+        padding: 11px 13px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface-raised);
+      }
+      .service-title { font-weight: 700; }
+      .service-meta { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .service-state { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+      .service-state.success { color: var(--success); }
+      .service-state.warning { color: var(--warning); }
+      .service-state.danger { color: var(--danger); }
+
+      .bottom-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+        gap: 14px;
+        margin-top: 14px;
+      }
+      .address-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+      .address-item { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+      .address-item strong { display: block; margin-bottom: 5px; font-size: 12px; }
+      .address-item code { display: block; overflow: hidden; color: var(--muted); font: 11px var(--font-body); text-overflow: ellipsis; white-space: nowrap; }
+      .log-preview { display: grid; gap: 8px; }
+      .log-line { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+      .log-line::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--neutral); }
+      .log-line:first-child::before { background: var(--success); }
+      .log-line span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .log-action { width: 100%; margin-top: 14px; }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(7, 11, 17, 0.72);
+        -webkit-backdrop-filter: blur(5px);
+        backdrop-filter: blur(5px);
+      }
+      .modal-backdrop.hidden { display: none; }
+      .modal {
+        width: min(520px, 100%);
+        max-height: calc(100vh - 40px);
+        overflow: auto;
+        padding: 24px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+      .modal.wide { width: min(720px, 100%); }
+      .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+      .modal-head h2 { font-size: 21px; }
+      .modal-copy { margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+      .modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+      .qr-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 20px; }
+      .qr-card { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
+      .qr-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 700; }
+      .qr-box { display: grid; place-items: center; min-height: 188px; margin-top: 12px; border-radius: 10px; background: #fff; }
+      .qr-box img { width: 172px; height: 172px; }
+      .qr-url { min-height: 36px; margin-top: 10px; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+      .qr-actions { display: flex; gap: 8px; margin-top: 10px; }
+      .qr-actions .btn { flex: 1; min-height: 38px; }
+      .pair-warning { margin-top: 16px; color: var(--warning); font-size: 12px; }
+      .full-log { max-height: 360px; margin-top: 18px; overflow: auto; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); color: var(--muted); font: 12px/1.65 ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: pre-wrap; }
+      .toast {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 80;
+        max-width: min(380px, calc(100% - 40px));
+        padding: 12px 15px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        font-size: 13px;
+        opacity: 0;
+        transform: translateY(10px);
+        pointer-events: none;
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+      .toast.show { opacity: 1; transform: translateY(0); }
+      .toast.danger { border-color: rgba(240, 111, 114, 0.5); color: var(--danger); }
+
+      @media (max-width: 1020px) {
+        .topnav-inner { grid-template-columns: minmax(0, 1fr) auto; }
+        .overall-status { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; margin-top: -4px; }
+        .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .main-grid, .bottom-grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 680px) {
+        :root { --gutter: 12px; }
+        .topnav { position: static; }
+        .topnav-inner { min-height: 0; grid-template-columns: 1fr; padding-top: 13px; padding-bottom: 13px; }
+        .brand-mark { width: 42px; height: 42px; }
+        .brand h1 { font-size: 22px; }
+        .brand p { display: none; }
+        .topnav-inner > .btn { width: 100%; }
+        .overall-status { grid-column: 1; grid-row: auto; }
+        .summary-grid { grid-template-columns: 1fr; }
+        .summary-card { min-height: 96px; }
+        .address-list, .qr-grid { grid-template-columns: 1fr; }
+        .panel { padding: 16px; }
+        .action-buttons { display: grid; grid-template-columns: 1fr; }
+        .action-buttons .btn { width: 100%; }
+        .modal-actions .btn { flex: 1 1 130px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { transition-duration: 0.01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topnav">
+        <div class="container topnav-inner">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">TB</div>
+            <div>
+              <h1>Token BI 控制台</h1>
+              <p>本机服务与副屏看板入口保持在同一个工作台。</p>
+            </div>
+          </div>
+          <div class="overall-status" id="serverPill" role="status" aria-live="polite">
+            <span class="status-dot warning" id="serverIcon"></span>
+            <span id="serverState">正在检查服务</span>
+          </div>
+          <button class="btn btn-primary" id="serviceActionBtn">
+            <svg id="serviceActionIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5z" /></svg>
+            <span id="serviceActionLabel">开启服务</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="container workspace">
+        <section class="summary-grid">
+          <article class="card summary-card account-summary">
+            <div class="summary-head">
+              <span class="label">当前账号</span>
+              <button class="mini-action" id="accountActionBtn"><span id="accountActionLabel">登录账号</span></button>
+            </div>
+            <div class="summary-value" id="accountState">正在检查</div>
+            <div class="summary-note" id="accountStatus">等待账号状态</div>
+          </article>
+          <article class="card summary-card">
+            <div class="summary-head"><span class="label">数据源</span><span class="pill warning" id="sourceBadge">待检查</span></div>
+            <div class="summary-value" id="dataSourceValue">等待同步</div>
+            <div class="summary-note" id="dataSourceState">启动后检查 OAuth / CLI RPC / Web Session</div>
+          </article>
+          <article class="card summary-card">
+            <div class="summary-head"><span class="label">看板端口</span></div>
+            <div class="summary-value num" id="dashboardPort">--</div>
+            <div class="summary-note" id="dashboardState">服务启动后可用</div>
+          </article>
+          <article class="card summary-card">
+            <div class="summary-head"><span class="label">最近同步</span></div>
+            <div class="summary-value num" id="lastRefreshValue">--:--</div>
+            <div class="summary-note" id="lastRefreshState">等待首次同步</div>
+          </article>
+        </section>
+
+        <section class="main-grid">
+          <article class="card panel action-panel">
+            <div class="panel-head"><div><h2>快捷操作</h2><p class="panel-sub">主要操作会跟随账号与服务状态自动调整。</p></div></div>
+            <div class="action-hero">
+              <h3 id="operationTitle">打开副屏看板</h3>
+              <p id="dashboardActionHint">主服务启动后，副屏入口将在当前网络内可用。</p>
+              <div class="action-buttons">
+                <button class="btn btn-primary" id="openDashboardBtn" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8" /><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>
+                  <span id="primaryActionLabel">打开看板</span>
+                </button>
+                <button class="btn btn-secondary" id="pairDeviceBtn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="5" height="5" /><rect x="15" y="4" width="5" height="5" /><rect x="4" y="15" width="5" height="5" /><path d="M15 15h2v2h3v3h-5z" /></svg>
+                  扫码连接副屏
+                </button>
+                <button class="btn btn-secondary" id="refreshBtn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M19 12a7 7 0 1 1-2-5" /></svg>
+                  <span id="refreshButtonLabel">刷新状态</span>
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card panel">
+            <div class="panel-head"><div><h2>服务状态</h2><p class="panel-sub">核心结果优先，技术信息保留给排障。</p></div></div>
+            <div class="service-list">
+              <div class="service-row">
+                <span class="status-dot success"></span>
+                <div><div class="service-title">控制台 sidecar</div><div class="service-meta" id="sidecarDetail">127.0.0.1:8790 · healthy</div></div>
+                <span class="service-state success">运行中</span>
+              </div>
+              <div class="service-row">
+                <span class="status-dot" id="mainServiceDot"></span>
+                <div><div class="service-title">主服务</div><div class="service-meta" id="mainServiceDetail">正在检查</div></div>
+                <span class="service-state" id="mainServiceState">检查中</span>
+              </div>
+              <div class="service-row">
+                <span class="status-dot warning" id="loginDot"></span>
+                <div><div class="service-title">登录窗口</div><div class="service-meta" id="loginMeta">仅登录时拉起，用完自动弱化</div></div>
+                <span class="service-state warning" id="loginState">待命</span>
+              </div>
+              <div class="service-row">
+                <span class="status-dot"></span>
+                <div><div class="service-title">运行日志</div><div class="service-meta">异常时提升为可见入口</div></div>
+                <span class="service-state num" id="logLineCount">-- 行</span>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="bottom-grid">
+          <article class="card panel">
+            <div class="panel-head"><div><h2>副屏入口</h2><p class="panel-sub">同一局域网内使用局域网或固定地址连接。</p></div></div>
+            <div class="address-list">
+              <div class="address-item"><strong>本机地址</strong><code id="localUrl">--</code></div>
+              <div class="address-item"><strong>局域网地址</strong><code id="lanUrl">--</code></div>
+              <div class="address-item"><strong>固定地址</strong><code id="fixedUrl">--</code></div>
+            </div>
+          </article>
+
+          <article class="card panel">
+            <div class="panel-head"><div><h2>最近日志</h2><p class="panel-sub">默认弱化，异常时自动提升。</p></div></div>
+            <div class="log-preview" id="logPreview">
+              <div class="log-line"><span>正在读取运行日志</span><span class="num">等待</span></div>
+            </div>
+            <button class="btn btn-secondary log-action" id="logsButton">查看运行日志</button>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <div id="pairModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+      <section class="modal wide">
+        <div class="modal-head">
+          <div><h2 id="pairTitle">扫码连接副屏</h2><p class="modal-copy">副屏需与本机处于同一局域网。固定入口无法访问时，改用局域网入口。</p></div>
+          <button class="btn btn-ghost" data-close="pairModal" aria-label="关闭二维码">关闭</button>
+        </div>
+        <div class="pair-warning" id="pairWarning"></div>
+        <div class="qr-grid">
+          <article class="qr-card">
+            <div class="qr-title"><span>固定入口</span><span class="pill">推荐</span></div>
+            <div class="qr-box"><img id="fixedQr" alt="固定入口二维码" /></div>
+            <div class="qr-url" id="fixedQrUrl">--</div>
+            <div class="qr-actions"><button class="btn btn-secondary" data-copy="fixed">复制</button><button class="btn btn-secondary" data-open="fixed">打开</button></div>
+          </article>
+          <article class="qr-card">
+            <div class="qr-title"><span>局域网入口</span><span class="pill warning">备用</span></div>
+            <div class="qr-box"><img id="lanQr" alt="局域网入口二维码" /></div>
+            <div class="qr-url" id="lanQrUrl">--</div>
+            <div class="qr-actions"><button class="btn btn-secondary" data-copy="lan">复制</button><button class="btn btn-secondary" data-open="lan">打开</button></div>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div id="logsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="logsTitle">
+      <section class="modal wide">
+        <div class="modal-head"><div><h2 id="logsTitle">运行日志</h2><p class="modal-copy">仅展示运行摘要与错误类型，不展示 token、cookie 或完整账号信息。</p></div><button class="btn btn-ghost" data-close="logsModal">关闭</button></div>
+        <pre class="full-log" id="fullLog">暂无运行日志。</pre>
+        <div class="modal-actions"><button class="btn btn-primary" data-close="logsModal">完成</button></div>
+      </section>
+    </div>
+
+    <div id="accountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+      <section class="modal">
+        <div class="modal-head"><div><h2 id="accountModalTitle">退出当前账号？</h2><p class="modal-copy">退出后将清理当前会话缓存；再次查看额度前需要重新完成 Codex 登录授权。</p></div></div>
+        <div class="modal-actions"><button class="btn btn-secondary" data-close="accountModal">取消</button><button class="btn btn-danger" id="confirmLogoutButton">退出账号</button></div>
+      </section>
+    </div>
+
+    <div id="loginModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+      <section class="modal">
+        <div class="modal-head"><div><h2 id="loginModalTitle">完成 Codex 登录授权</h2><p class="modal-copy">专用登录窗口已打开。完成登录后返回控制台刷新状态，Token BI 会继续检查 OAuth、CLI RPC 和 Web Session。</p></div></div>
+        <div class="modal-actions"><button class="btn btn-secondary" data-close="loginModal">稍后处理</button><button class="btn btn-primary" id="confirmLoginButton">刷新状态</button></div>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      (function () {
+        var latestPayload = null;
+        var latestUrls = {};
+        var latestRunning = false;
+        var primaryAction = "dashboard";
+        var toastTimer = null;
+
+        function byId(id) { return document.getElementById(id); }
+
+        function sourceLabel(sourceType) {
+          var labels = {
+            oauth: "OAuth",
+            cli_rpc: "CLI RPC",
+            web_session: "Web Session",
+            dom_fallback: "Web 页面兼容",
+            local_snapshot: "本地测试数据"
+          };
+          return labels[sourceType] || "等待同步";
+        }
+
+        function formatSyncTime(value) {
+          if (!value) return "--:--";
+          var date = new Date(value);
+          if (Number.isNaN(date.getTime())) return "--:--";
+          return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+
+        function setDot(element, tone) {
+          element.className = "status-dot" + (tone ? " " + tone : "");
+        }
+
+        function setServiceIcon(running) {
+          byId("serviceActionIcon").innerHTML = running
+            ? '<rect x="6" y="6" width="12" height="12" rx="2"></rect>'
+            : '<path d="m9 7 8 5-8 5z"></path>';
+        }
+
+        function showToast(message, danger) {
+          window.clearTimeout(toastTimer);
+          var toast = byId("toast");
+          toast.textContent = message || "操作完成";
+          toast.className = "toast show" + (danger ? " danger" : "");
+          toastTimer = window.setTimeout(function () { toast.className = "toast"; }, 2600);
+        }
+
+        function openModal(id) { byId(id).classList.remove("hidden"); }
+        function closeModal(id) { byId(id).classList.add("hidden"); }
+
+        function renderLogPreview(logText) {
+          var lines = String(logText || "").split("\n").filter(Boolean);
+          var recent = lines.slice(-3);
+          if (!recent.length) recent = ["暂无运行日志"];
+          byId("logPreview").innerHTML = "";
+          recent.forEach(function (line, index) {
+            var row = document.createElement("div");
+            row.className = "log-line";
+            var copy = document.createElement("span");
+            copy.textContent = line;
+            var state = document.createElement("span");
+            state.className = "num";
+            state.textContent = index === recent.length - 1 ? "最新" : "记录";
+            row.appendChild(copy);
+            row.appendChild(state);
+            byId("logPreview").appendChild(row);
+          });
+          byId("fullLog").textContent = lines.length ? lines.join("\n") : "暂无运行日志。";
+          byId("logLineCount").textContent = lines.length + " 行";
+        }
+
+        function renderStatus(payload) {
+          latestPayload = payload;
+          latestUrls = payload.urls || {};
+          latestRunning = Boolean(payload.running);
+          var accountActionLabel = payload.account_action_label || "登录账号";
+          var hasActiveAccount = accountActionLabel === "退出账号";
+          var usage = payload.usage || null;
+          var logText = payload.log_tail || "";
+
+          byId("serverState").textContent = latestRunning ? "服务运行中 · 看板可用" : "主服务未启动 · 看板暂不可用";
+          setDot(byId("serverIcon"), latestRunning ? "success" : "warning");
+          byId("serviceActionBtn").className = latestRunning ? "btn btn-danger" : "btn btn-primary";
+          byId("serviceActionLabel").textContent = payload.service_action_label || (latestRunning ? "关闭服务" : "开启服务");
+          setServiceIcon(latestRunning);
+
+          byId("accountActionLabel").textContent = accountActionLabel;
+          if (payload.account) {
+            byId("accountState").textContent = payload.account.masked_email || payload.account.account_id || "已登录";
+            byId("accountStatus").textContent = payload.account.status === "active" ? "已连接 Codex 登录态" : (payload.account.status || "等待授权");
+          } else {
+            byId("accountState").textContent = "未登录";
+            byId("accountStatus").textContent = "需要完成 Codex 登录授权";
+          }
+
+          byId("dataSourceValue").textContent = usage ? sourceLabel(usage.source_type) : "等待同步";
+          byId("dataSourceState").textContent = usage
+            ? (usage.source_detail || usage.connector_name || "已获取官方额度")
+            : String(payload.data_source_status || "数据源：等待同步").replace(/^数据源：/, "");
+          byId("sourceBadge").textContent = usage ? "已连接" : "待检查";
+          byId("sourceBadge").className = usage ? "pill" : "pill warning";
+
+          byId("dashboardPort").textContent = payload.port || "--";
+          byId("dashboardState").textContent = latestRunning ? "局域网内可访问" : "服务启动后可用";
+          byId("lastRefreshValue").textContent = formatSyncTime(usage && usage.updated_at);
+          byId("lastRefreshState").textContent = usage ? "官方额度已同步" : "等待首次同步";
+          byId("sidecarDetail").textContent = "127.0.0.1:" + (payload.control_port || 8790) + " · healthy";
+
+          primaryAction = hasActiveAccount ? "dashboard" : "account";
+          byId("operationTitle").textContent = hasActiveAccount ? "打开副屏看板" : "登录 Codex 账号";
+          byId("primaryActionLabel").textContent = hasActiveAccount ? "打开看板" : "登录账号";
+          byId("openDashboardBtn").disabled = hasActiveAccount && !latestRunning;
+          byId("dashboardActionHint").textContent = !hasActiveAccount
+            ? "完成登录授权后，Token BI 将自动识别可用数据源。"
+            : (latestRunning ? "入口已就绪，可在本机或副屏查看当前额度。" : "请先开启主服务，再打开副屏看板。");
+
+          setDot(byId("mainServiceDot"), latestRunning ? "success" : "");
+          byId("mainServiceDetail").textContent = "0.0.0.0:" + (payload.port || "--") + " · " + (latestRunning ? "dashboard ready" : "waiting");
+          byId("mainServiceState").textContent = latestRunning ? "运行中" : "已停止";
+          byId("mainServiceState").className = "service-state" + (latestRunning ? " success" : "");
+          byId("loginState").textContent = hasActiveAccount ? "待命" : "需要登录";
+          byId("loginState").className = "service-state warning";
+          byId("loginMeta").textContent = hasActiveAccount ? "仅登录时拉起，用完自动弱化" : "未检测到可用的 Codex 账号";
+
+          byId("localUrl").textContent = latestUrls.local || "不可用";
+          byId("lanUrl").textContent = latestUrls.lan || "不可用";
+          byId("fixedUrl").textContent = latestUrls.fixed || "不可用";
+          renderLogPreview(logText);
+        }
+
+        async function readStatus() {
+          var response = await fetch("/api/status", { cache: "no-store" });
+          if (!response.ok) throw new Error("状态读取失败");
+          return await response.json();
+        }
+
+        async function refreshStatus() {
+          var payload = await readStatus();
+          renderStatus(payload);
+          return payload;
+        }
+
+        async function postAction(path, button, pendingLabel) {
+          var actionButton = button && button.tagName === "BUTTON" ? button : (button && button.closest ? button.closest("button") : null);
+          var originalLabel = button ? button.textContent : "";
+          if (actionButton) {
+            actionButton.disabled = true;
+            if (pendingLabel) button.textContent = pendingLabel;
+          }
+          try {
+            var response = await fetch(path, { method: "POST" });
+            var payload = await response.json();
+            showToast(payload.message || (payload.ok ? "操作完成" : "操作失败"), !payload.ok);
+            await refreshStatus();
+            return payload;
+          } catch (error) {
+            showToast(error && error.message ? error.message : "请求失败，请重试", true);
+            return { ok: false };
+          } finally {
+            if (actionButton) {
+              actionButton.disabled = false;
+              if (pendingLabel) button.textContent = originalLabel;
+            }
+          }
+        }
+
+        function refreshQrCard(kind, imageId, urlId) {
+          var image = byId(imageId);
+          var url = latestUrls[kind] || "";
+          byId(urlId).textContent = url || "当前入口不可用";
+          if (url) {
+            image.hidden = false;
+            image.src = "/api/qrcode?kind=" + encodeURIComponent(kind) + "&t=" + Date.now();
+          } else {
+            image.hidden = true;
+            image.removeAttribute("src");
+          }
+        }
+
+        function openPairModal() {
+          refreshQrCard("fixed", "fixedQr", "fixedQrUrl");
+          refreshQrCard("lan", "lanQr", "lanQrUrl");
+          byId("pairWarning").textContent = latestRunning
+            ? "扫码后会打开当前 Mac 提供的看板入口，请保持 Token BI 运行。"
+            : "主服务尚未启动，可以先扫码保存入口，但打开时会显示无法连接。";
+          openModal("pairModal");
+        }
+
+        async function copyUrl(kind) {
+          var value = latestUrls[kind];
+          if (!value) { showToast("当前入口不可用", true); return; }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+          } else {
+            var textarea = document.createElement("textarea");
+            textarea.value = value;
+            textarea.style.position = "fixed";
+            textarea.style.opacity = "0";
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand("copy");
+            textarea.remove();
+          }
+          showToast("入口已复制");
+        }
+
+        byId("serviceActionBtn").addEventListener("click", function () {
+          postAction("/api/service-action", byId("serviceActionLabel"), latestRunning ? "正在关闭…" : "正在开启…");
+        });
+        byId("openDashboardBtn").addEventListener("click", async function () {
+          if (primaryAction === "account") {
+            var result = await postAction("/api/account-action", byId("primaryActionLabel"), "正在打开…");
+            if (result.ok) openModal("loginModal");
+            return;
+          }
+          await postAction("/api/open-dashboard", byId("primaryActionLabel"), "正在打开…");
+        });
+        byId("accountActionBtn").addEventListener("click", async function () {
+          if (latestPayload && latestPayload.account_action_label === "退出账号") {
+            openModal("accountModal");
+            return;
+          }
+          var result = await postAction("/api/account-action", byId("accountActionLabel"), "正在打开…");
+          if (result.ok) openModal("loginModal");
+        });
+        byId("confirmLogoutButton").addEventListener("click", async function () {
+          var result = await postAction("/api/account-action", byId("confirmLogoutButton"), "正在退出…");
+          if (result.ok) closeModal("accountModal");
+        });
+        byId("confirmLoginButton").addEventListener("click", async function () {
+          var result = await postAction("/api/refresh-status", byId("confirmLoginButton"), "正在检查…");
+          if (result.ok) closeModal("loginModal");
+        });
+        byId("refreshBtn").addEventListener("click", function () {
+          postAction("/api/refresh-status", byId("refreshButtonLabel"), "检查中…");
+        });
+        byId("pairDeviceBtn").addEventListener("click", openPairModal);
+        byId("logsButton").addEventListener("click", function () { openModal("logsModal"); });
+
+        document.querySelectorAll("[data-close]").forEach(function (button) {
+          button.addEventListener("click", function () { closeModal(button.getAttribute("data-close")); });
+        });
+        document.querySelectorAll(".modal-backdrop").forEach(function (backdrop) {
+          backdrop.addEventListener("click", function (event) { if (event.target === backdrop) closeModal(backdrop.id); });
+        });
+        document.querySelectorAll("[data-copy]").forEach(function (button) {
+          button.addEventListener("click", function () { copyUrl(button.getAttribute("data-copy")); });
+        });
+        document.querySelectorAll("[data-open]").forEach(function (button) {
+          button.addEventListener("click", function () {
+            postAction("/api/open-url?kind=" + encodeURIComponent(button.getAttribute("data-open")), button, "正在打开…");
+          });
+        });
+        document.addEventListener("keydown", function (event) {
+          if (event.key === "Escape") {
+            document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach(function (modal) { closeModal(modal.id); });
+          }
+        });
+
+        refreshStatus().catch(function () { showToast("无法读取控制台状态", true); });
+        window.setInterval(function () { refreshStatus().catch(function () {}); }, 5000);
+      })();
+    </script>
+  </body>
+</html>
