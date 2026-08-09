@@ -22,7 +22,6 @@ class Settings:
     accounts_file: Path
     host: str
     port: int
-    cache_ttl_seconds: int
     analytics_url: str
     manual_login_url: str
     browser_app_name: str
@@ -78,7 +77,6 @@ def get_settings() -> Settings:
         accounts_file=config_dir / "accounts.json",
         host=os.getenv("TOKEN_BI_HOST", "0.0.0.0"),
         port=int(os.getenv("TOKEN_BI_PORT", "8787")),
-        cache_ttl_seconds=int(os.getenv("TOKEN_BI_CACHE_TTL", "90")),
         analytics_url=os.getenv(
             "TOKEN_BI_ANALYTICS_URL",
             "https://chatgpt.com/codex/cloud/settings/analytics#usage",

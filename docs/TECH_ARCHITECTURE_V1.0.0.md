@@ -307,9 +307,10 @@ flowchart LR
 职责：
 
 - 统一调度 usage connector。
-- 区分 `not_applicable`、`reauth_required`、`rate_limited`、`source_changed` 和普通失败。
+- 统一输出 `not_applicable`、`auth_required`、`network_error`、`timeout`、`rate_limited`、`source_changed`、`web_session_inactive`、`internal_error`。
 - 按优先级依次尝试 connector。
 - 记录最终成功的数据源和失败降级原因。
+- 最终错误以 OAuth / CLI RPC 的真实语义为准，Web Session 未运行不能覆盖主链路的网络、超时或限流错误。
 
 建议接口：
 
@@ -338,8 +339,8 @@ class UsageConnector:
 - 选择当前账号。
 - 调用 `UsageConnectorManager`。
 - 将官方窗口转换为 `DashboardPayload`。
-- 写入短时缓存。
-- 失败时返回 stale 数据或明确错误。
+- 一次调用只执行一次上游同步，不承担缓存、定时调度或退避。
+- 账号 `pending` / `invalid` / `expired` 只用于界面状态，不得阻断 OAuth / CLI RPC 尝试；任一 connector 成功后自动恢复为 `active`。
 
 变化：
 
@@ -347,19 +348,22 @@ class UsageConnector:
 - 不再把缺少 session 视为异常。
 - 不再按 `primary_window` / `secondary_window` 推断业务枚举。
 
-### 7.3 CacheService
+### 7.3 UsageSyncCoordinator 与 LatestDashboardStore
 
 职责：
 
-- 保存最近一次成功的 `DashboardPayload`。
-- 为失败时 stale 展示提供数据。
-- 避免短时间重复读取主链路。
+- 主服务启动后在后台立即同步，成功后每 180 秒同步一次。
+- 自动同步、手动同步、控制台刷新与多个副屏共用 single-flight，同一时刻只允许一次上游请求。
+- `GET /api/v1/dashboard` 只读内存中的最新状态，不调用 connector。
+- 失败时保留最后一次成功额度，并按错误类型调度重试。
+- 将最后一次成功结果原子写入 `runtime/cache/latest_dashboard.json`，服务重启后可立即恢复 stale 展示。
 
-建议：
+持久化边界：
 
-- 成功结果 TTL：90 秒。
-- stale 结果可保留到进程生命周期结束。
-- 不跨进程持久化 usage 历史。
+- 只保存一份当前快照，不追加、不形成 usage 历史。
+- 只保存归一化指标、数据源、同步时间和脱敏账号标识。
+- 禁止写入 token、cookie、`raw_window`、账号明文、浏览器 profile 或 session 路径。
+- 退出账号或发现账号标识不匹配时删除快照。
 
 ### 7.4 AccountService
 
@@ -433,19 +437,21 @@ v1.0.0 变化：
 sequenceDiagram
     participant Sidecar as Sidecar Browser
     participant API as FastAPI Dashboard API
+    participant Coordinator as UsageSyncCoordinator
     participant Usage as UsageService
     participant Manager as UsageConnectorManager
     participant OAuth as CodexOAuthConnector
     participant CLI as CodexCliRpcConnector
     participant Web as WebSessionConnector
-    participant Cache as CacheService
+    participant Store as LatestDashboardStore
 
     Sidecar->>API: GET /api/v1/dashboard
-    API->>Cache: lookup fresh payload
-    alt cache hit
-        Cache-->>API: payload
-    else cache miss
-        API->>Usage: get_dashboard()
+    API->>Coordinator: get_dashboard()
+    Coordinator-->>API: 内存中的最新状态
+    API-->>Sidecar: JSON / HTML
+
+    loop Mac 后台调度（成功后 180 秒）
+        Coordinator->>Usage: sync_dashboard()
         Usage->>Manager: fetch_usage(account)
         Manager->>OAuth: fetch_usage()
         alt OAuth success
@@ -456,14 +462,13 @@ sequenceDiagram
                 CLI-->>Manager: official windows
             else CLI unavailable
                 Manager->>Web: fetch_usage()
-                Web-->>Manager: official windows or error
+                Web-->>Manager: existing session result or typed failure
             end
         end
         Manager-->>Usage: connector result
-        Usage->>Cache: save payload
-        Usage-->>API: DashboardPayload
+        Usage-->>Coordinator: DashboardPayload
+        Coordinator->>Store: 原子替换最后成功快照
     end
-    API-->>Sidecar: JSON / HTML
 ```
 
 ### 8.2 首次授权
@@ -495,8 +500,9 @@ sequenceDiagram
 ### 9.1 成功刷新
 
 - 默认刷新间隔：180 秒。
-- 手动同步：绕过短时缓存。
-- 成功后更新 `updated_at`、`source_type`、`source_detail`。
+- 副屏本地状态轮询：15 秒，不触发官方接口。
+- 手动同步：直接请求协调器执行一次上游同步，并与正在运行的同步任务合并。
+- 成功后更新 `updated_at`、`last_attempt_at`、`last_success_at`、`next_sync_at`、`source_type`、`source_detail`。
 
 ### 9.2 失败退避
 
@@ -518,9 +524,9 @@ sequenceDiagram
 
 行为：
 
-- 优先返回短时缓存。
-- 缓存未命中时按 connector 优先级读取。
-- 失败时返回 stale 或错误状态。
+- 只读取 `UsageSyncCoordinator` 当前状态，禁止调用 OAuth、CLI RPC 或 Web Session。
+- 服务重启后可先返回磁盘中的最后成功快照，并标记为 stale。
+- 返回 `last_attempt_at`、`last_success_at` 与 `next_sync_at`，供副屏展示真实同步状态。
 
 ### 10.2 `POST /api/v1/dashboard/refresh`
 
@@ -528,8 +534,8 @@ sequenceDiagram
 
 行为：
 
-- 清理当前账号短时缓存。
-- 强制读取主链路。
+- 请求协调器立即读取主链路。
+- 若已有同步正在运行，则等待并复用同一次结果，不重复请求官方接口。
 - 失败时按退避和 stale 规则返回。
 
 ### 10.3 `GET /api/v1/diagnostics`

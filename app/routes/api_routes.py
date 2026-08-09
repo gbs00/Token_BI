@@ -65,14 +65,17 @@ def health(request: Request) -> dict:
 def runtime_status(request: Request) -> dict:
     container = request.app.state.container
     account = container.account_service.preferred_account()
-    cached = container.usage_service.get_cached_dashboard(
+    cached = container.usage_sync_coordinator.get_dashboard(
         account.account_id if account is not None else None
     )
     usage = None
-    if cached is not None:
+    if cached.metrics:
         usage = {
             "state": cached.state.value,
-            "updated_at": cached.summary.updated_at,
+            "updated_at": cached.summary.last_success_at or cached.summary.updated_at,
+            "source_updated_at": cached.summary.updated_at,
+            "last_attempt_at": cached.summary.last_attempt_at,
+            "next_sync_at": cached.summary.next_sync_at,
             "source_type": cached.summary.source_type,
             "source_detail": cached.summary.source_detail,
             "connector_name": cached.summary.connector_name,
@@ -89,7 +92,7 @@ def runtime_status(request: Request) -> dict:
 @router.get("/dashboard")
 def get_dashboard(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
-    payload = container.usage_service.get_dashboard(account_id=account_id)
+    payload = container.usage_sync_coordinator.get_dashboard(account_id=account_id)
     return payload.model_dump(mode="json")
 
 
@@ -111,7 +114,7 @@ def validate_account(request: Request, account_id: str) -> dict:
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
-    payload = container.usage_service.refresh_dashboard(account_id=account_id)
+    payload = container.usage_sync_coordinator.refresh(account_id=account_id)
     updated = container.account_service.get_account(account_id)
     session = container.browser_worker_service.get_session_snapshot(account_id)
     if payload.state == PageState.READY:
@@ -202,9 +205,9 @@ def logout_account_session(request: Request, account_id: Optional[str] = None) -
         }
 
     container.browser_worker_service.close_session(account.account_id)
-    container.cache_service.clear(f"usage:{account.account_id}")
     deleted = container.account_service.delete_account(account.account_id)
     container.session_service.delete_context(account.account_id)
+    container.usage_sync_coordinator.clear(account.account_id)
     if deleted is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
@@ -322,7 +325,7 @@ def diagnostics(request: Request) -> dict:
 @router.post("/dashboard/refresh")
 def refresh_dashboard(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
-    payload = container.usage_service.refresh_dashboard(account_id=account_id)
+    payload = container.usage_sync_coordinator.refresh(account_id=account_id)
     if payload.state == PageState.READY and payload.account is not None:
         container.browser_worker_service.minimize_session(payload.account.account_id)
     return payload.model_dump(mode="json")

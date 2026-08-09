@@ -42,6 +42,7 @@ def _write_active_account_with_snapshot(app, account_id: str, email: str, sessio
         ),
         encoding="utf-8",
     )
+    app.state.container.usage_sync_coordinator.refresh(account_id)
 
 
 def _write_active_account_with_weekly_only_snapshot(app, account_id: str, email: str, weekly_pct: int) -> None:
@@ -71,6 +72,7 @@ def _write_active_account_with_weekly_only_snapshot(app, account_id: str, email:
         ),
         encoding="utf-8",
     )
+    app.state.container.usage_sync_coordinator.refresh(account_id)
 
 
 def _write_active_account_with_windows(app, account_id: str, email: str, windows: list[dict]) -> None:
@@ -99,6 +101,7 @@ def _write_active_account_with_windows(app, account_id: str, email: str, windows
         ),
         encoding="utf-8",
     )
+    app.state.container.usage_sync_coordinator.refresh(account_id)
 
 
 def test_dashboard_directly_displays_masked_account_without_switcher(app) -> None:
@@ -279,6 +282,14 @@ def test_dashboard_sync_button_forces_live_refresh() -> None:
 
     assert "/api/v1/dashboard/refresh" in js
     assert 'method: forceRefresh ? "POST" : "GET"' in js
+
+
+def test_dashboard_polls_local_state_and_uses_server_sync_schedule() -> None:
+    js = Path("app/static/js/dashboard.js").read_text(encoding="utf-8")
+
+    assert "var localPollIntervalMs = 15000" in js
+    assert "payload.summary.next_sync_at" in js
+    assert "refreshIntervalMs = 180000" not in js
 
 
 def test_dashboard_visible_source_label_uses_actual_connector(app) -> None:

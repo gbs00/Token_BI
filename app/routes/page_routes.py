@@ -22,7 +22,7 @@ def root(request: Request) -> RedirectResponse:
 def dashboard_page(request: Request, account_id: Optional[str] = None) -> HTMLResponse:
     container = request.app.state.container
     accounts = container.account_service.list_visible_accounts(preferred_account_id=account_id)
-    dashboard = container.usage_service.get_dashboard(account_id=account_id)
+    dashboard = container.usage_sync_coordinator.get_dashboard(account_id=account_id)
 
     return templates.TemplateResponse(
         request=request,

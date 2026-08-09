@@ -252,7 +252,9 @@ def test_runtime_status_reports_only_last_successful_usage(app) -> None:
     assert after["account"]["account_id"] == account_id
     assert after["usage"]["state"] == "ready"
     assert after["usage"]["source_type"] == "local_snapshot"
-    assert after["usage"]["updated_at"] == "2026-04-21T23:00:00+08:00"
+    assert after["usage"]["updated_at"] is not None
+    assert after["usage"]["source_updated_at"] == "2026-04-21T23:00:00+08:00"
+    assert after["usage"]["next_sync_at"] is not None
 
 
 def test_service_startup_does_not_launch_browser_worker_for_active_accounts(container) -> None:
@@ -382,6 +384,8 @@ def test_dashboard_api_maps_demo_query_to_real_visible_account(app) -> None:
         ),
         encoding="utf-8",
     )
+
+    app.state.container.usage_sync_coordinator.refresh("acc_real_active")
 
     response = client.get("/api/v1/dashboard?account_id=acc_demo_main")
 

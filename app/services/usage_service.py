@@ -11,16 +11,9 @@ from app.models.usage_snapshot import (
     PageState,
 )
 from app.services.account_service import AccountService
-from app.services.browser_worker_service import LiveSessionRequiredError
-from app.services.cache_service import CacheService
-from app.services.scraper_service import (
-    AnalyticsPageChangedError,
-    ScraperUnavailableError,
-    SessionExpiredError,
-)
+from app.services.scraper_service import AnalyticsPageChangedError
 from app.services.session_service import SessionService
 from app.services.usage_connectors import (
-    ConnectorRateLimitedError,
     UsageConnectorManager,
     normalize_usage_payload,
 )
@@ -36,91 +29,19 @@ class UsageService:
     def __init__(
         self,
         account_service: AccountService,
-        cache_service: CacheService,
         session_service: SessionService,
         connector_manager: UsageConnectorManager,
     ) -> None:
         self._account_service = account_service
-        self._cache_service = cache_service
         self._session_service = session_service
         self._connector_manager = connector_manager
 
-    def get_dashboard(self, account_id: Optional[str] = None, force_refresh: bool = False) -> DashboardPayload:
+    def sync_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
         account = self._resolve_account(account_id)
         if account is None:
-            return self._bootstrap_local_codex_dashboard()
+            account = self._bootstrap_account()
 
-        cache_key = f"usage:{account.account_id}"
-        if not force_refresh:
-            cached = self._cache_service.get(cache_key)
-            if cached is not None:
-                return cached
-
-        explicit_account_requested = account_id is not None
-        if (
-            explicit_account_requested
-            and not force_refresh
-            and account.status in {AccountStatus.PENDING, AccountStatus.INVALID}
-        ):
-            return self._build_reauth_required(
-                account=account,
-                message="Start the live browser worker on Mac and complete the first Codex login.",
-            )
-
-        if explicit_account_requested and not force_refresh and account.status == AccountStatus.EXPIRED:
-            return self._build_reauth_required(
-                account=account,
-                message="Live browser session expired on Mac. Please sign in again and keep the worker running.",
-            )
-
-        try:
-            connector_result = self._connector_manager.fetch_usage(account)
-        except LiveSessionRequiredError as exc:
-            stale = self._build_stale_from_cache(
-                cache_key=cache_key,
-                account=account,
-                message=str(exc),
-                state=PageState.REAUTH_REQUIRED,
-            )
-            if stale is not None:
-                return stale
-            return self._build_reauth_required(account=account, message=str(exc))
-        except SessionExpiredError as exc:
-            self._account_service.update_account_status(account.account_id, status="expired")
-            stale = self._build_stale_from_cache(
-                cache_key=cache_key,
-                account=account,
-                message=str(exc),
-                state=PageState.REAUTH_REQUIRED,
-            )
-            if stale is not None:
-                return stale
-            return self._build_reauth_required(account=account, message=str(exc))
-        except AnalyticsPageChangedError as exc:
-            stale = self._build_stale_from_cache(
-                cache_key=cache_key,
-                account=account,
-                message=str(exc),
-                state=PageState.SOURCE_CHANGED,
-            )
-            if stale is not None:
-                return stale
-            return self._build_error(account=account, message=str(exc), state=PageState.SOURCE_CHANGED)
-        except ConnectorRateLimitedError as exc:
-            stale = self._build_stale_from_cache(
-                cache_key=cache_key,
-                account=account,
-                message=str(exc),
-                state=PageState.RATE_LIMITED,
-            )
-            if stale is not None:
-                return stale
-            return self._build_error(account=account, message=str(exc), state=PageState.RATE_LIMITED)
-        except ScraperUnavailableError as exc:
-            stale = self._build_stale_from_cache(cache_key=cache_key, account=account, message=str(exc))
-            if stale is not None:
-                return stale
-            return self._build_error(account=account, message=str(exc))
+        connector_result = self._connector_manager.fetch_usage(account)
 
         identity = str(connector_result.payload.get("account_masked_email") or "").strip()
         if identity and identity != account.masked_email:
@@ -138,6 +59,15 @@ class UsageService:
             source_type=connector_result.source_type,
             source_detail=connector_result.source_detail,
         )
+        if account.account_id == "acc_local_codex":
+            account = self._account_service.create_account(
+                CreateAccountRequest(
+                    account_alias=identity or "Codex local account",
+                    masked_email=identity or "Codex local account",
+                )
+            )
+            payload = payload.model_copy(update={"account": account})
+
         if account.status != AccountStatus.ACTIVE:
             updated_account = self._account_service.update_account_status(
                 account.account_id,
@@ -148,152 +78,36 @@ class UsageService:
                 account = updated_account
                 payload = payload.model_copy(update={"account": updated_account})
         if not payload.metrics:
-            message = "官方返回的额度窗口暂不支持展示。"
-            stale = self._build_stale_from_cache(
-                cache_key=cache_key,
-                account=account,
-                message=message,
-                state=PageState.SOURCE_CHANGED,
-            )
-            if stale is not None:
-                return stale
-            return payload.model_copy(
-                update={
-                    "state": PageState.SOURCE_CHANGED,
-                    "message": message,
-                }
-            )
-        self._cache_service.set(cache_key, payload)
+            raise AnalyticsPageChangedError("官方返回的额度窗口暂不支持展示。")
         return payload
-
-    def refresh_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
-        return self.get_dashboard(account_id=account_id, force_refresh=True)
-
-    def get_cached_dashboard(self, account_id: Optional[str] = None) -> Optional[DashboardPayload]:
-        account = self._resolve_account(account_id)
-        if account is None:
-            return None
-        return self._cache_service.get_stale(f"usage:{account.account_id}")
 
     def _resolve_account(self, account_id: Optional[str]) -> Optional[AccountRecord]:
         return self._account_service.preferred_account(account_id)
 
-    def _bootstrap_local_codex_dashboard(self) -> DashboardPayload:
-        bootstrap_account = AccountRecord(
+    def current_account(self, account_id: Optional[str] = None) -> Optional[AccountRecord]:
+        return self._resolve_account(account_id)
+
+    def mark_account_expired(self, account_id: str) -> Optional[AccountRecord]:
+        return self._account_service.update_account_status(
+            account_id,
+            AccountStatus.EXPIRED.value,
+        )
+
+    def empty_dashboard(self, message: Optional[str] = None) -> DashboardPayload:
+        return DashboardPayload(
+            account=self._resolve_account(None),
+            state=PageState.EMPTY,
+            message=message or "等待首次同步，Token BI 将自动读取本机 Codex 登录态。",
+            detail_links=self._detail_links(),
+        )
+
+    def _bootstrap_account(self) -> AccountRecord:
+        return AccountRecord(
             account_id="acc_local_codex",
             account_alias="Codex local account",
             masked_email="Codex local account",
             status=AccountStatus.ACTIVE,
             session_storage_path=str(self._session_service.context_dir("acc_local_codex")),
-        )
-        try:
-            connector_result = self._connector_manager.fetch_usage(bootstrap_account)
-        except LiveSessionRequiredError:
-            return DashboardPayload(
-                state=PageState.EMPTY,
-                message="No usage data yet. Complete Codex login authorization on Mac first.",
-                detail_links=self._detail_links(),
-            )
-        except SessionExpiredError as exc:
-            return self._build_reauth_required(account=bootstrap_account, message=str(exc))
-        except AnalyticsPageChangedError as exc:
-            return self._build_error(
-                account=bootstrap_account,
-                message=str(exc),
-                state=PageState.SOURCE_CHANGED,
-            )
-        except ConnectorRateLimitedError as exc:
-            return self._build_error(
-                account=bootstrap_account,
-                message=str(exc),
-                state=PageState.RATE_LIMITED,
-            )
-        except ScraperUnavailableError as exc:
-            return DashboardPayload(
-                state=PageState.EMPTY,
-                message=str(exc),
-                detail_links=self._detail_links(),
-            )
-
-        identity = str(connector_result.payload.get("account_masked_email") or "").strip()
-        account = self._account_service.create_account(
-            CreateAccountRequest(
-                account_alias=identity or "Codex local account",
-                masked_email=identity or "Codex local account",
-            )
-        )
-        payload = self._build_ready_payload(
-            account=account,
-            raw_payload=connector_result.payload,
-            connector_name=connector_result.connector_name,
-            source_type=connector_result.source_type,
-            source_detail=connector_result.source_detail,
-        )
-        updated_account = self._account_service.update_account_status(
-            account.account_id,
-            status=AccountStatus.ACTIVE.value,
-            update_validation_time=True,
-        )
-        if updated_account is not None:
-            payload = payload.model_copy(update={"account": updated_account})
-        if not payload.metrics:
-            return payload.model_copy(
-                update={
-                    "state": PageState.SOURCE_CHANGED,
-                    "message": "官方返回的额度窗口暂不支持展示。",
-                }
-            )
-        self._cache_service.set(f"usage:{account.account_id}", payload)
-        return payload
-
-    def _build_reauth_required(self, account: AccountRecord, message: str) -> DashboardPayload:
-        return DashboardPayload(
-            account=account,
-            state=PageState.REAUTH_REQUIRED,
-            message=message,
-            summary=DashboardSummary(
-                source_type="scraped",
-                source_detail="session_required",
-                connector_name="browser_worker",
-                is_estimated=True,
-            ),
-            detail_links=self._detail_links(),
-        )
-
-    def _build_error(
-        self,
-        account: AccountRecord,
-        message: str,
-        state: PageState = PageState.ERROR,
-    ) -> DashboardPayload:
-        return DashboardPayload(
-            account=account,
-            state=state,
-            message=message,
-            summary=DashboardSummary(
-                source_type="unknown",
-                source_detail=state.value,
-                is_estimated=True,
-            ),
-            detail_links=self._detail_links(),
-        )
-
-    def _build_stale_from_cache(
-        self,
-        cache_key: str,
-        account: AccountRecord,
-        message: str,
-        state: PageState = PageState.STALE,
-    ) -> Optional[DashboardPayload]:
-        stale = self._cache_service.get_stale(cache_key)
-        if stale is None:
-            return None
-        return stale.model_copy(
-            update={
-                "account": account,
-                "state": state,
-                "message": message,
-            }
         )
 
     def _build_ready_payload(

@@ -10,6 +10,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Protocol
 from urllib.error import HTTPError, URLError
@@ -29,7 +30,65 @@ class ConnectorNotApplicableError(ScraperUnavailableError):
 
 
 class ConnectorRateLimitedError(ScraperUnavailableError):
-    pass
+    def __init__(self, message: str, retry_after_seconds: Optional[float] = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ConnectorNetworkError(ScraperUnavailableError):
+    def __init__(self, message: str, immediate_retry: bool = False) -> None:
+        super().__init__(message)
+        self.immediate_retry = immediate_retry
+
+
+class ConnectorTimeoutError(ScraperUnavailableError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.immediate_retry = True
+
+
+class ConnectorFailureCategory(str, Enum):
+    NOT_APPLICABLE = "not_applicable"
+    AUTH_REQUIRED = "auth_required"
+    NETWORK_ERROR = "network_error"
+    TIMEOUT = "timeout"
+    RATE_LIMITED = "rate_limited"
+    SOURCE_CHANGED = "source_changed"
+    WEB_SESSION_INACTIVE = "web_session_inactive"
+    INTERNAL_ERROR = "internal_error"
+
+
+@dataclass(frozen=True)
+class ConnectorFailure:
+    connector_name: str
+    category: ConnectorFailureCategory
+    error_type: str
+    message: str
+    retry_after_seconds: Optional[float] = None
+    immediate_retry: bool = False
+
+
+class ConnectorChainError(ScraperUnavailableError):
+    def __init__(
+        self,
+        primary_failure: ConnectorFailure,
+        failures: Iterable[ConnectorFailure],
+    ) -> None:
+        super().__init__(primary_failure.message)
+        self.primary_failure = primary_failure
+        self.failures = tuple(failures)
+
+    @property
+    def category(self) -> ConnectorFailureCategory:
+        return self.primary_failure.category
+
+    @property
+    def retry_after_seconds(self) -> Optional[float]:
+        return self.primary_failure.retry_after_seconds
+
+    @property
+    def immediate_retry(self) -> bool:
+        return self.primary_failure.immediate_retry
 
 
 @dataclass(frozen=True)
@@ -179,12 +238,21 @@ class CodexOAuthConnector:
             if exc.code in {401, 403}:
                 raise SessionExpiredError("Codex login is not authorized for usage data.") from exc
             if exc.code == 429:
-                raise ConnectorRateLimitedError("Codex usage endpoint is rate limited.") from exc
+                retry_after = _parse_retry_after(exc.headers.get("Retry-After") if exc.headers else None)
+                raise ConnectorRateLimitedError(
+                    "Codex usage endpoint is rate limited.",
+                    retry_after_seconds=retry_after,
+                ) from exc
             if exc.code >= 500:
-                raise ScraperUnavailableError("Codex usage endpoint is temporarily unavailable.") from exc
+                raise ConnectorNetworkError(
+                    "Codex usage endpoint is temporarily unavailable.",
+                    immediate_retry=True,
+                ) from exc
             raise ScraperUnavailableError(f"Codex usage endpoint returned HTTP {exc.code}.") from exc
         except (URLError, OSError) as exc:
-            raise ScraperUnavailableError("Unable to reach Codex usage endpoint.") from exc
+            if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+                raise ConnectorTimeoutError("Codex usage endpoint timed out.") from exc
+            raise ConnectorNetworkError("Unable to reach Codex usage endpoint.") from exc
 
         try:
             return json.loads(raw)
@@ -261,7 +329,7 @@ class CodexCliRpcConnector:
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "clientInfo": {"name": "token-bi", "version": "1.1.1"},
+                        "clientInfo": {"name": "token-bi", "version": "1.1.2"},
                         "capabilities": {"experimentalApi": True},
                     },
                 },
@@ -327,8 +395,8 @@ class CodexCliRpcConnector:
             selector.close()
         detail = redact_sensitive_text(stderr_tail.strip())
         if detail:
-            raise ScraperUnavailableError(f"Codex app-server RPC timed out: {detail}")
-        raise ScraperUnavailableError("Codex app-server RPC timed out.")
+            raise ConnectorTimeoutError(f"Codex app-server RPC timed out: {detail}")
+        raise ConnectorTimeoutError("Codex app-server RPC timed out.")
 
     def _stop_rpc_process(self, process: subprocess.Popen) -> None:
         try:
@@ -422,57 +490,109 @@ class UsageConnectorManager:
         return list(self._connectors)
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
-        errors: list[tuple[str, ScraperUnavailableError]] = []
+        failures: list[ConnectorFailure] = []
         for connector in self._connectors:
             try:
                 result = connector.fetch_usage(account)
-                self.last_connector_errors = self._serialize_errors(errors)
+                self.last_connector_errors = self._serialize_failures(failures)
                 return result
-            except ConnectorNotApplicableError as exc:
-                errors.append((connector.name, exc))
-                continue
-            except LiveSessionRequiredError as exc:
-                errors.append((connector.name, exc))
-                continue
-            except SessionExpiredError as exc:
-                errors.append((connector.name, exc))
-                continue
-            except ConnectorRateLimitedError as exc:
-                errors.append((connector.name, exc))
-                continue
-            except AnalyticsPageChangedError as exc:
-                errors.append((connector.name, exc))
-                continue
             except ScraperUnavailableError as exc:
-                errors.append((connector.name, exc))
+                failures.append(self._to_failure(connector.name, exc))
+                continue
+            except Exception as exc:
+                failures.append(
+                    ConnectorFailure(
+                        connector_name=connector.name,
+                        category=ConnectorFailureCategory.INTERNAL_ERROR,
+                        error_type=exc.__class__.__name__,
+                        message="Usage connector failed unexpectedly.",
+                    )
+                )
                 continue
 
-        self.last_connector_errors = self._serialize_errors(errors)
-        if not errors:
-            raise ScraperUnavailableError("No usage connector available for this account.")
+        self.last_connector_errors = self._serialize_failures(failures)
+        if not failures:
+            failures.append(
+                ConnectorFailure(
+                    connector_name="connector_manager",
+                    category=ConnectorFailureCategory.INTERNAL_ERROR,
+                    error_type="NoConnectorError",
+                    message="No usage connector is configured.",
+                )
+            )
+        raise ConnectorChainError(self._select_primary_failure(failures), failures)
 
-        for error_type in (
-            SessionExpiredError,
-            ConnectorRateLimitedError,
-            AnalyticsPageChangedError,
-            LiveSessionRequiredError,
+    def _to_failure(self, connector_name: str, exc: ScraperUnavailableError) -> ConnectorFailure:
+        category = ConnectorFailureCategory.INTERNAL_ERROR
+        if isinstance(exc, ConnectorNotApplicableError):
+            category = ConnectorFailureCategory.NOT_APPLICABLE
+        elif isinstance(exc, SessionExpiredError):
+            category = ConnectorFailureCategory.AUTH_REQUIRED
+        elif isinstance(exc, ConnectorRateLimitedError):
+            category = ConnectorFailureCategory.RATE_LIMITED
+        elif isinstance(exc, AnalyticsPageChangedError):
+            category = ConnectorFailureCategory.SOURCE_CHANGED
+        elif isinstance(exc, ConnectorTimeoutError):
+            category = ConnectorFailureCategory.TIMEOUT
+        elif isinstance(exc, ConnectorNetworkError):
+            category = ConnectorFailureCategory.NETWORK_ERROR
+        elif isinstance(exc, LiveSessionRequiredError):
+            category = ConnectorFailureCategory.WEB_SESSION_INACTIVE
+
+        return ConnectorFailure(
+            connector_name=connector_name,
+            category=category,
+            error_type=exc.__class__.__name__,
+            message=redact_sensitive_text(str(exc)),
+            retry_after_seconds=getattr(exc, "retry_after_seconds", None),
+            immediate_retry=bool(getattr(exc, "immediate_retry", False)),
+        )
+
+    def _select_primary_failure(self, failures: list[ConnectorFailure]) -> ConnectorFailure:
+        primary_names = {"codex_oauth", "codex_cli_rpc"}
+        primary_failures = [item for item in failures if item.connector_name in primary_names]
+        candidates = primary_failures or [
+            item
+            for item in failures
+            if item.category != ConnectorFailureCategory.WEB_SESSION_INACTIVE
+        ]
+        candidates = candidates or failures
+
+        # 高优数据源的真实错误优先，Web Session 仅作为最后兜底，不能覆盖根因。
+        for category in (
+            ConnectorFailureCategory.RATE_LIMITED,
+            ConnectorFailureCategory.SOURCE_CHANGED,
+            ConnectorFailureCategory.TIMEOUT,
+            ConnectorFailureCategory.NETWORK_ERROR,
+            ConnectorFailureCategory.INTERNAL_ERROR,
+            ConnectorFailureCategory.AUTH_REQUIRED,
+            ConnectorFailureCategory.WEB_SESSION_INACTIVE,
+            ConnectorFailureCategory.NOT_APPLICABLE,
         ):
-            matching = [exc for _, exc in errors if isinstance(exc, error_type)]
+            matching = [item for item in candidates if item.category == category]
             if matching:
-                raise matching[0]
+                return matching[0]
+        return failures[0]
 
-        details = " | ".join(f"{name}: {exc}" for name, exc in errors)
-        raise ScraperUnavailableError(details)
-
-    def _serialize_errors(self, errors: list[tuple[str, ScraperUnavailableError]]) -> list[dict[str, str]]:
+    def _serialize_failures(self, failures: list[ConnectorFailure]) -> list[dict[str, str]]:
         return [
             {
-                "connector_name": name,
-                "error_type": exc.__class__.__name__,
-                "message": redact_sensitive_text(str(exc)),
+                "connector_name": item.connector_name,
+                "category": item.category.value,
+                "error_type": item.error_type,
+                "message": item.message,
             }
-            for name, exc in errors
+            for item in failures
         ]
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value.strip()))
+    except (TypeError, ValueError):
+        return None
 
 
 def normalize_usage_payload(payload: dict, source_type: str, source_detail: str) -> dict:

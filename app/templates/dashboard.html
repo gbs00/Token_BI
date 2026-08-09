@@ -61,13 +61,13 @@
 
           <div class="info-block sync-block" aria-label="同步状态">
             <div class="meta-label">下次同步</div>
-            <div class="info-value num refresh-countdown" data-refresh-countdown>03:00</div>
+            <div class="info-value num refresh-countdown" data-refresh-countdown>--:--</div>
             <div
               class="meta-label last-sync-label"
               data-last-sync
-              {% if dashboard.summary.updated_at %}data-updated-at="{{ dashboard.summary.updated_at.isoformat() }}"{% endif %}
+              {% if dashboard.summary.last_success_at or dashboard.summary.updated_at %}data-updated-at="{{ (dashboard.summary.last_success_at or dashboard.summary.updated_at).isoformat() }}"{% endif %}
             >
-              {{ '最近同步：刚刚' if dashboard.summary.updated_at else '等待首次同步' }}
+              {{ '最近同步：刚刚' if dashboard.summary.last_success_at or dashboard.summary.updated_at else '等待首次同步' }}
             </div>
           </div>
 

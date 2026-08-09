@@ -38,6 +38,9 @@ class DetailLink(BaseModel):
 
 class DashboardSummary(BaseModel):
     updated_at: Optional[datetime] = None
+    last_attempt_at: Optional[datetime] = None
+    last_success_at: Optional[datetime] = None
+    next_sync_at: Optional[datetime] = None
     source_type: str = "scraped"
     source_detail: str = "unknown"
     connector_name: Optional[str] = None

@@ -7,6 +7,15 @@
 - [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)：V1.0.0 后续开发使用的技术架构文档
 - [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
 
+## 2026-08-09 副屏同步稳定性 P0
+
+- 官方额度同步由 Mac 主服务后台统一执行，成功后每 180 秒同步一次；iPhone 等副屏每 15 秒只读取 Mac 本地状态。
+- `GET /api/v1/dashboard` 不再触发 OAuth、CLI RPC 或 Web Session，多个副屏不会放大官方请求。
+- `POST /api/v1/dashboard/refresh` 保留为显式手动同步入口，并与正在运行的同步任务合并。
+- OAuth / CLI RPC 的网络、超时、限流或授权错误使用结构化语义，不再被 Web Session 未运行错误覆盖。
+- 最近一次成功额度保存为单一安全快照 `runtime/cache/latest_dashboard.json`；重启后可立即恢复展示，但不保存 usage 历史或认证凭据。
+- 网络首次失败 15 秒后重试，连续失败改为 60 秒；429 至少退避 20 秒，5xx/超时在 2 秒后最多重试一次。
+
 ## 2026-05-23 V1.0.0 技术设计收敛
 
 1.0.0 的开发方向从“Chrome/CDP 抓取主链路”收敛为“Codex OAuth / Codex CLI RPC 优先，Web Session 兜底”。

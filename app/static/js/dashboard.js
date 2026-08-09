@@ -1,5 +1,5 @@
 (function () {
-  var refreshIntervalMs = 180000;
+  var localPollIntervalMs = 15000;
   var retryIntervalMs = 15000;
   var ringCircumference = 263.89378290154264;
   var timerId = null;
@@ -284,9 +284,10 @@
     if (sourceDot) sourceDot.className = "health-dot state-" + (payload.state || "empty");
     var lastSync = document.querySelector("[data-last-sync]");
     if (lastSync) {
-      if (payload.summary && payload.summary.updated_at) {
-        lastSync.setAttribute("data-updated-at", payload.summary.updated_at);
-        lastSync.textContent = formatLastSync(new Date(payload.summary.updated_at));
+      var lastSuccessAt = payload.summary && (payload.summary.last_success_at || payload.summary.updated_at);
+      if (lastSuccessAt) {
+        lastSync.setAttribute("data-updated-at", lastSuccessAt);
+        lastSync.textContent = formatLastSync(new Date(lastSuccessAt));
       } else {
         lastSync.removeAttribute("data-updated-at");
         lastSync.textContent = "等待首次同步";
@@ -295,6 +296,8 @@
     setMessageBanner(payload.message || "");
     var normalizedMetrics = syncMetricCards(payload.metrics || []);
     normalizedMetrics.forEach(function (metric) { updateMetric(metric.metric_type, metric); });
+    var nextSyncAt = payload.summary && payload.summary.next_sync_at;
+    if (nextSyncAt) startCountdown(new Date(nextSyncAt).getTime(), "");
   }
 
   function startCountdown(deadlineMs, prefix) {
@@ -312,7 +315,6 @@
 
   function scheduleRefresh(delayMs, prefix) {
     if (timerId) window.clearTimeout(timerId);
-    startCountdown(Date.now() + delayMs, prefix || "");
     timerId = window.setTimeout(function () { fetchDashboard(); }, delayMs);
   }
 
@@ -329,7 +331,7 @@
       if (!response.ok) throw new Error("Dashboard refresh failed: " + response.status);
       var payload = await response.json();
       updateDashboard(payload);
-      scheduleRefresh(refreshIntervalMs, "");
+      scheduleRefresh(localPollIntervalMs, "");
       if (forceRefresh) showToast("额度已同步，数据源 " + sourceLabel(payload.summary && payload.summary.source_type), false);
     } catch (error) {
       setMessageBanner("连接中断，Token BI 会自动重试并保留上次成功数据。");

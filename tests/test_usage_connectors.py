@@ -7,11 +7,20 @@ from datetime import datetime
 import pytest
 
 from app.models.account import AccountRecord, AccountStatus
-from app.services.scraper_service import AnalyticsPageChangedError, ScraperUnavailableError
+from app.services.browser_worker_service import LiveSessionRequiredError
+from app.services.scraper_service import (
+    AnalyticsPageChangedError,
+    ScraperUnavailableError,
+    SessionExpiredError,
+)
 from app.services.usage_connectors import (
     CodexCliRpcConnector,
     CodexOAuthConnector,
+    ConnectorChainError,
+    ConnectorFailureCategory,
+    ConnectorNetworkError,
     ConnectorNotApplicableError,
+    ConnectorTimeoutError,
     LocalCodexConnector,
     UsageConnectorManager,
     UsageConnectorResult,
@@ -56,6 +65,17 @@ class SensitiveFailingConnector:
             "access_token=secret-token Authorization: Bearer another-token "
             "cookie=session-id someone.long@example.com"
         )
+
+
+class TypedFailingConnector:
+    source_type = "test"
+
+    def __init__(self, name: str, error: ScraperUnavailableError) -> None:
+        self.name = name
+        self.error = error
+
+    def fetch_usage(self, account):
+        raise self.error
 
 
 class FakeBrowserWorkerService:
@@ -168,6 +188,46 @@ def test_connector_manager_redacts_sensitive_error_details(test_settings) -> Non
     assert "session-id" not in message
     assert "someone.long@example.com" not in message
     assert "some****@example.com" in message
+
+
+def test_primary_transient_error_is_not_overwritten_by_missing_web_session(test_settings) -> None:
+    account = _build_account(test_settings)
+    manager = UsageConnectorManager(
+        [
+            TypedFailingConnector("codex_oauth", ConnectorNetworkError("OAuth network failed")),
+            TypedFailingConnector("codex_cli_rpc", ConnectorTimeoutError("CLI timed out")),
+            TypedFailingConnector(
+                "browser_worker",
+                LiveSessionRequiredError("No live browser worker for this account."),
+            ),
+        ]
+    )
+
+    with pytest.raises(ConnectorChainError) as captured:
+        manager.fetch_usage(account)
+
+    assert captured.value.category == ConnectorFailureCategory.TIMEOUT
+    assert captured.value.category != ConnectorFailureCategory.WEB_SESSION_INACTIVE
+    assert manager.last_connector_errors[-1]["category"] == "web_session_inactive"
+
+
+def test_definitive_primary_auth_failure_wins_over_web_fallback_state(test_settings) -> None:
+    account = _build_account(test_settings)
+    manager = UsageConnectorManager(
+        [
+            TypedFailingConnector("codex_oauth", SessionExpiredError("OAuth expired")),
+            TypedFailingConnector("codex_cli_rpc", SessionExpiredError("CLI signed out")),
+            TypedFailingConnector(
+                "browser_worker",
+                LiveSessionRequiredError("No live browser worker for this account."),
+            ),
+        ]
+    )
+
+    with pytest.raises(ConnectorChainError) as captured:
+        manager.fetch_usage(account)
+
+    assert captured.value.category == ConnectorFailureCategory.AUTH_REQUIRED
 
 
 def test_oauth_connector_reads_codex_auth_and_normalizes_official_windows(test_settings) -> None:

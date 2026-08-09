@@ -2,6 +2,32 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## v1.1.2 - 副屏同步稳定性修复
+
+日期：2026-08-09
+
+- 新增 Mac 端 `UsageSyncCoordinator`：主服务启动后异步同步，成功后每 180 秒同步一次；副屏每 15 秒只读取本地状态。
+- 自动同步、看板手动同步、控制台刷新与多副屏请求使用 single-flight，同一时刻只执行一次上游请求。
+- 账号状态从 connector 执行条件中解耦，`pending`、`invalid`、`expired` 账号仍会优先尝试 OAuth 与 CLI RPC，成功后自动恢复为 `active`。
+- connector 失败统一为结构化类别；OAuth / CLI RPC 的网络、超时、限流或授权错误不再被 `No live browser` 覆盖。
+- 新增单一 `latest_dashboard.json` 成功快照，使用原子替换和当前用户读写权限；重启后立即展示上次数据，不保存 usage 历史、token、cookie、原始窗口、账号明文或浏览器 profile 路径。
+- 实现 15/60 秒网络退避、429 至少 20 秒并尊重 `Retry-After`、5xx/超时 2 秒单次重试；失败期间保留最后成功额度。
+- `GET /api/v1/dashboard` 改为纯本地读取，`POST /api/v1/dashboard/refresh` 保留为显式强制同步入口；看板倒计时改为后端真实 `next_sync_at`。
+- 无数据迁移，直接替换旧的进程内 usage 缓存；退出账号时同步删除最后成功快照。
+
+验证：
+
+- Python 完整回归：137 passed；Rust/Tauri 单元测试：5 passed。
+- Python 编译、JavaScript 语法、Rust 格式与 Git 差异检查通过。
+- `npm run app:build` 通过，生成 `Token BI.app` 与 `Token BI_1.1.2_aarch64.dmg`。
+- App 深度签名、DMG 校验与挂载检查通过；打包后的主服务健康检查返回 `1.1.2`，OAuth 后台同步及本地看板读取通过。
+- 本次 Release 由本地构建和验证后手动发布，GitHub Actions 发布流水线保持停用。
+
+当前限制：
+
+- 发布包仅支持 macOS Apple Silicon（arm64），采用 ad hoc 签名且未完成 Apple 公证，首次打开可能出现 Gatekeeper 提示。
+- 本版本未配置 Tauri updater 私钥，因此不提供自动更新签名和 `latest.json`，需通过 DMG 手动更新。
+
 ## v1.1.1 - 账号链路、启动性能与控制台/看板重构
 
 日期：2026-07-12

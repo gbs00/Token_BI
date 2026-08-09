@@ -31,7 +31,6 @@ def test_settings(tmp_path: Path) -> Settings:
         accounts_file=project_root / "config" / "accounts.json",
         host="127.0.0.1",
         port=8787,
-        cache_ttl_seconds=1,
         analytics_url="https://chatgpt.com/codex/cloud/settings/analytics#usage",
         manual_login_url="https://chatgpt.com/#usage",
         browser_app_name="Google Chrome",
