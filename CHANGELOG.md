@@ -48,6 +48,7 @@
 - 从同一 DMG 替换 `/Applications/Token BI.app`，安装版本确认为 1.1.3；旧版保留在忽略目录 `dist/Token BI-v1.1.2-before-v1.1.3.noindex` 以便回滚，不改动运行数据。
 - 安装后的控制台启动、主服务停止与重启通过；真实 OAuth 同步返回 `ready`。本机 IPv4、IPv6、局域网 IP、`.local` 的 `/dashboard` 均返回 200，不代表其他设备的网络路径已验收。
 - DMG SHA-256：`ad4a818e8e5552c23ceb2f03a729e9750c8175ca718d30707525c60650c0397d`。完整用户更新说明见 `docs/RELEASE_NOTES_v1.1.3.md`。
+- GitHub Release 已发布：`https://github.com/gbs00/Token_BI/releases/tag/v1.1.3`。GitHub 将附件文件名中的空格转换为点号，发布用 SHA-256 文件按 `Token.BI_1.1.3_aarch64.dmg` 下载名称生成；代码标签保持对应已验证的构建提交。
 
 已知限制：`.local` 入口仍依赖路由器和副屏支持 Bonjour/mDNS，同名 Wi-Fi 不保证允许设备互访；不支持时使用局域网 IP 入口。底层浏览器驱动完全阻塞时，同步会超时返回且不会堆积采集线程，但可能仍需重启主服务。iPhone/Safari 实机效果需用户验收。
 

@@ -16,7 +16,7 @@
 
 ## 下载与升级
 
-- 下载 `Token BI_1.1.3_aarch64.dmg`，适用于 Apple Silicon Mac。
+- 下载 `Token.BI_1.1.3_aarch64.dmg`，适用于 Apple Silicon Mac。GitHub 会将本地构建文件名中的空格转换为点号，校验文件使用实际下载名称。
 - 退出旧版 Token BI，将新版替换到“应用程序”后重新打开。无手工数据迁移，账号记录和运行数据保留。
 - 同时提供 `.sha256` 文件供校验。未配置自动更新签名，本版本通过 DMG 手动升级。
 
