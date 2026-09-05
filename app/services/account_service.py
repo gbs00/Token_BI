@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -25,11 +26,60 @@ class AccountService:
         return [AccountRecord.model_validate(item) for item in raw.get("accounts", [])]
 
     def _write_accounts(self, accounts: list[AccountRecord]) -> None:
-        payload = {"accounts": [account.model_dump(mode="json") for account in accounts]}
-        self._settings.accounts_file.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        payload = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+        payload["accounts"] = [account.model_dump(mode="json") for account in accounts]
+        self._write_payload(payload)
+
+    def _write_payload(self, payload: dict) -> None:
+        path = self._settings.accounts_file
+        temporary = path.with_suffix(".json.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def access_state(self) -> tuple[bool, int]:
+        with self._lock:
+            raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+            return raw.get("access_enabled", True) is True, int(raw.get("access_revision", 0))
+
+    def set_access_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+            raw["access_enabled"] = enabled
+            raw["access_revision"] = int(raw.get("access_revision", 0)) + 1
+            self._write_payload(raw)
+
+    def commit_synced_account(self, proposed: AccountRecord, revision: int) -> Optional[AccountRecord]:
+        # 校验接入代次，避免退出后迟到的采集结果重新创建账号。
+        with self._lock:
+            if self.access_state() != (True, revision):
+                return None
+            accounts = self._read_accounts()
+            index = next((i for i, item in enumerate(accounts) if item.account_id == proposed.account_id), None)
+            if index is None and proposed.account_id != "acc_local_codex":
+                return None
+            if proposed.account_id == "acc_local_codex":
+                account_id = f"acc_{uuid.uuid4().hex[:8]}"
+                proposed = proposed.model_copy(update={
+                    "account_id": account_id,
+                    "session_storage_path": str(self._settings.runtime_contexts_dir / account_id),
+                })
+            committed = proposed.model_copy(update={
+                "status": AccountStatus.ACTIVE,
+                "last_validated_at": datetime.now(timezone.utc),
+            })
+            if index is None:
+                accounts.append(committed)
+            else:
+                accounts[index] = committed
+            self._write_accounts(accounts)
+            return committed
 
     def list_accounts(self) -> list[AccountRecord]:
         with self._lock:
@@ -207,6 +257,7 @@ class AccountService:
                     update={
                         "account_alias": normalized_email,
                         "masked_email": normalized_email,
+                        "identity_key": None,
                     }
                 )
                 accounts[index] = updated_account

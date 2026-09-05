@@ -2,6 +2,57 @@
 
 本文记录 Token BI 从需求探索到可运行 MVP 的关键版本变化。版本号用于产品与架构沟通，不强绑定发布包。
 
+## v1.1.3 - 账号一致性、同步恢复与局域网稳定性
+
+日期：2026-09-05
+
+发布范围：包含 2026-08-10 局域网与单实例修复，以及 2026-09-05 评审问题 1–6 修复。支持 macOS Apple Silicon；DMG 使用 ad hoc 签名，未完成 Apple Developer ID 签名或公证，不提供自动更新签名。
+
+### 局域网入口与单实例
+
+- 确认 `v1.1.2` 主服务持续监听 `0.0.0.0`，本机通过当前 LAN IP 与 `.local` 地址均返回 `200`；当前副屏失败请求没有到达 Token BI，根因范围收敛到网络切换后的旧地址、mDNS 或 Wi-Fi 设备互访限制。
+- iPhone 实机证明局域网 IPv4 入口可用、`.local` 固定入口不可用；进一步确认 mDNS 同时公布 IPv4 / IPv6，而主服务仅监听 IPv4，导致副屏优先连接 IPv6 时被拒绝。
+- 主服务改为使用预绑定 IPv6 socket 并关闭 `IPV6_V6ONLY`，同一端口同时接收 IPv4 与 IPv6；系统不支持 IPv6 时回退到原 IPv4 启动链路。
+- 局域网地址改为根据系统默认路由接口获取，并保留 `en0` / `en1` 回退；地址缓存缩短为 5 秒，手动刷新和端口变化会立即失效旧缓存。
+- macOS App 增加 `NSLocalNetworkUsageDescription`，明确说明副屏看板所需的本地网络用途。
+- 引入 Tauri 官方 single-instance 插件；从其他路径重复打开 Token BI 时只聚焦现有窗口，不再启动第二个控制台生命周期。
+- 只有实际启动 control sidecar 的 App 实例才执行退出清理，避免非所有者窗口关闭共享主服务。
+- Tauri 构建目录迁移到 `src-tauri/target.noindex`，防止 Spotlight 将仓库内构建包识别为第二个正式应用。
+
+### 2026-09-05 - 评审问题 1–6 修复
+
+本轮范围：用户确认的账号一致性、同步超时、状态反馈、局域网管理权限、退出语义、进程停止安全。沿用 OAuth > CLI > Web 的单账号读取优先级，不修改用户真实 Codex 凭据，不重新设计 UI。
+
+1. 账号与有效额度一起提交；账号变化且新额度无法解析时不再复用旧指标。内存与磁盘均检查脱敏身份和身份键；CLI 在同一进程内读取并复核账号，避免读取期间切换账号造成错配。
+2. 增加 45 秒整体采集上限、并发等待上限、OAuth 整体响应超时、CLI 非阻塞分帧和 Web 请求中止；看板轮询超时后自动恢复，并忽略旧请求迟到的结果。
+3. 同步 HTTP 200 不再等于额度同步成功。控制台区分进程、服务健康和额度状态；保留旧数据时明确标注待更新，不宣称副屏已可达。
+4. 账号与运维 API 仅允许本机回环访问，包含 IPv4-mapped IPv6；校验管理请求 Host/Origin。局域网仍可读取与手动同步看板，但不能登录、退出、访问 session 路径或触发浏览器最小化。
+5. 退出后持久化暂停 Token BI 接入，重启或手动刷新也不会自动重新绑定。用户点击登录账号后优先复用本机 OAuth / CLI，缺少登录态时才打开 Web 登录；在途旧结果不得恢复账号或快照。
+6. 使用锁定版本 `psutil==7.2.2` 统一停止服务，验证进程身份及项目路径；移除端口批量终止和浏览器进程模糊匹配。开发脚本统一数据目录，默认不使用已安装 App 的数据与 PID 文件。
+
+追溯与验证：新增账号切换、退出/恢复竞态、悬挂请求、真实管道半行、慢速 HTTP 响应、IPv4/IPv6 管理限制、浏览器反馈和误指向 PID 回归。对应技术约束见 `docs/TECH_ARCHITECTURE_V1.0.0.md` 第 7、9、10 节；行为测试位于 `tests/test_ui_recovery.py` 与各服务测试文件。
+
+本地验证结果（2026-09-05）：
+
+- Python 完整回归：`env TOKEN_BI_APP_DATA_DIR=/tmp/token-bi-fix-regression PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider`，210 passed，22.05 秒；包含 13 项真实 Chromium 页面行为测试。
+- Rust/Tauri：在 `src-tauri` 执行 `env CARGO_TARGET_DIR=target.noindex cargo test --locked --offline --lib`，5 passed。
+- 看板 JavaScript 语法、六个启停脚本 Bash 语法、`pip check` 及 `git diff --check` 均通过。
+- 额外验证账号未变化时保留用户别名；测试使用隔离数据与模拟账号，不写入真实 Codex 凭据。未运行远端流水线，未进行 iPhone/Safari 实机或覆盖率验收。
+
+迁移与发布：无手工迁移，直接替换 App；旧账号文件缺省接入开启，新增状态首次写入补齐。保留应用运行数据及本机 Codex 登录态。用户已授权本地打包、覆盖安装、推送仓库并发布 v1.1.3；远端流水线保持停用。
+
+发布验证（2026-09-05）：
+
+- v1.1.3 版本一致性与完整回归再次通过：Python 210 项（24.66 秒）、Rust 5 项。
+- `npm run app:build` 成功生成 App 与 DMG；App 深度签名、DMG 校验、只读挂载和复制后的签名验证通过。
+- 从同一 DMG 替换 `/Applications/Token BI.app`，安装版本确认为 1.1.3；旧版保留在忽略目录 `dist/Token BI-v1.1.2-before-v1.1.3.noindex` 以便回滚，不改动运行数据。
+- 安装后的控制台启动、主服务停止与重启通过；真实 OAuth 同步返回 `ready`。本机 IPv4、IPv6、局域网 IP、`.local` 的 `/dashboard` 均返回 200，不代表其他设备的网络路径已验收。
+- DMG SHA-256：`ad4a818e8e5552c23ceb2f03a729e9750c8175ca718d30707525c60650c0397d`。完整用户更新说明见 `docs/RELEASE_NOTES_v1.1.3.md`。
+
+已知限制：`.local` 入口仍依赖路由器和副屏支持 Bonjour/mDNS，同名 Wi-Fi 不保证允许设备互访；不支持时使用局域网 IP 入口。底层浏览器驱动完全阻塞时，同步会超时返回且不会堆积采集线程，但可能仍需重启主服务。iPhone/Safari 实机效果需用户验收。
+
+工具说明：本轮 Serena、Sequential Thinking、Superpowers 不可用，使用本地工具与隔离测试，并在现有文档留痕；通过 Context7 查询 psutil 官方进程身份与 PID 复用保护说明。
+
 ## v1.1.2 - 副屏同步稳定性修复
 
 日期：2026-08-09

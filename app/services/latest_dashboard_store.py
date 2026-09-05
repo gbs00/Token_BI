@@ -48,7 +48,8 @@ class LatestDashboardStore:
                     self._clear_unlocked()
                     return None
                 stored_identity = str(raw.get("account_masked_email") or "").strip()
-                if stored_identity and stored_identity != account.masked_email:
+                if (stored_identity != account.masked_email
+                        or raw.get("account_identity_key") != account.identity_key):
                     self._clear_unlocked()
                     return None
                 return DashboardPayload(
@@ -71,6 +72,7 @@ class LatestDashboardStore:
             "version": self.VERSION,
             "account_id": payload.account.account_id,
             "account_masked_email": mask_identity(payload.account.masked_email),
+            "account_identity_key": payload.account.identity_key,
             "summary": payload.summary.model_dump(mode="json"),
             "metrics": [metric.model_dump(mode="json") for metric in payload.metrics],
             "detail_links": [link.model_dump(mode="json") for link in payload.detail_links],

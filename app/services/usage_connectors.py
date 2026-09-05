@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 import re
@@ -13,10 +14,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import httpx
 
-from app.models.account import AccountRecord
+from app.models.account import AccountRecord, identity_key
 from app.services.browser_worker_service import BrowserWorkerService, LiveSessionRequiredError
 from app.services.scraper_service import (
     AnalyticsPageChangedError,
@@ -163,6 +163,9 @@ class CodexOAuthConnector:
         )
         if account_identity:
             normalized["account_masked_email"] = account_identity
+        email = self._extract_email(id_token) or self._extract_email(access_token)
+        if email:
+            normalized["account_identity_key"] = identity_key(email)
         return UsageConnectorResult(
             connector_name=self.name,
             source_type=self.source_type,
@@ -206,6 +209,10 @@ class CodexOAuthConnector:
         return datetime.now(timezone.utc).timestamp() >= float(exp) - 30
 
     def _extract_account_identity(self, token: str) -> Optional[str]:
+        email = self._extract_email(token)
+        return mask_identity(email) if email else None
+
+    def _extract_email(self, token: Optional[str]) -> Optional[str]:
         payload = self._decode_jwt_payload(token)
         if payload is None:
             return None
@@ -213,10 +220,10 @@ class CodexOAuthConnector:
         if isinstance(profile, dict):
             email = profile.get("email")
             if isinstance(email, str) and email.strip():
-                return mask_identity(email)
+                return email.strip()
         email = payload.get("email")
         if isinstance(email, str) and email.strip():
-            return mask_identity(email)
+            return email.strip()
         return None
 
     def _decode_jwt_payload(self, token: str) -> Optional[dict]:
@@ -230,33 +237,49 @@ class CodexOAuthConnector:
         return payload if isinstance(payload, dict) else None
 
     def _default_http_get(self, url: str, headers: dict[str, str], timeout: float) -> dict:
-        request = Request(url, headers=headers, method="GET")
+        async def read_response() -> bytes:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                async with client.stream("GET", url, headers=headers) as response:
+                    response.raise_for_status()
+                    chunks = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > 4 * 1024 * 1024:
+                            raise AnalyticsPageChangedError("额度响应超过大小限制。")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+
+        async def fetch_with_deadline() -> bytes:
+            # 总截止时间包含连接、响应头和响应体，而非仅限制相邻字节的间隔。
+            return await asyncio.wait_for(read_response(), timeout=timeout)
+
         try:
-            with urlopen(request, timeout=timeout) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as exc:
-            if exc.code in {401, 403}:
+            raw = asyncio.run(fetch_with_deadline())
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            if code in {401, 403}:
                 raise SessionExpiredError("Codex login is not authorized for usage data.") from exc
-            if exc.code == 429:
-                retry_after = _parse_retry_after(exc.headers.get("Retry-After") if exc.headers else None)
+            if code == 429:
+                retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
                 raise ConnectorRateLimitedError(
                     "Codex usage endpoint is rate limited.",
                     retry_after_seconds=retry_after,
                 ) from exc
-            if exc.code >= 500:
+            if code >= 500:
                 raise ConnectorNetworkError(
                     "Codex usage endpoint is temporarily unavailable.",
                     immediate_retry=True,
                 ) from exc
-            raise ScraperUnavailableError(f"Codex usage endpoint returned HTTP {exc.code}.") from exc
-        except (URLError, OSError) as exc:
-            if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
-                raise ConnectorTimeoutError("Codex usage endpoint timed out.") from exc
+            raise ScraperUnavailableError(f"Codex usage endpoint returned HTTP {code}.") from exc
+        except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
+            raise ConnectorTimeoutError("Codex usage endpoint timed out.") from exc
+        except (httpx.HTTPError, OSError) as exc:
             raise ConnectorNetworkError("Unable to reach Codex usage endpoint.") from exc
 
         try:
             return json.loads(raw)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise AnalyticsPageChangedError("Codex usage endpoint returned an unsupported payload.") from exc
 
 
@@ -281,12 +304,23 @@ class CodexCliRpcConnector:
         if not self.cli_available():
             raise ConnectorNotApplicableError("Codex CLI is not installed.")
 
-        account_payload = self._rpc("account/read", {"refreshToken": False})
+        deadline = time.monotonic() + self._timeout_seconds
+        requests = [
+            ("account/read", {"refreshToken": False}),
+            ("account/rateLimits/read", None),
+            ("account/read", {"refreshToken": False}),
+        ]
+        if self._rpc_client is not None:
+            responses = [self._rpc_client(method, params) for method, params in requests]
+        else:
+            responses = self._rpc_sequence(requests, deadline)
+        account_payload, rate_limit_payload, verified_account = responses
         account_identity = self._extract_account_identity(account_payload)
         if account_payload.get("requiresOpenaiAuth") and account_payload.get("account") is None:
             raise SessionExpiredError("Codex CLI is not signed in. Please complete Codex login.")
 
-        rate_limit_payload = self._rpc("account/rateLimits/read", None)
+        if account_payload.get("account") != verified_account.get("account"):
+            raise ConnectorNetworkError("CLI 账号在采集期间发生变化，正在重新读取。", immediate_retry=True)
         normalized = normalize_usage_payload(
             rate_limit_payload,
             source_type=self.source_type,
@@ -294,6 +328,7 @@ class CodexCliRpcConnector:
         )
         if account_identity:
             normalized["account_masked_email"] = account_identity
+            normalized["account_identity_key"] = identity_key(account_payload["account"]["email"])
         return UsageConnectorResult(
             connector_name=self.name,
             source_type=self.source_type,
@@ -301,12 +336,10 @@ class CodexCliRpcConnector:
             payload=normalized,
         )
 
-    def _rpc(self, method: str, params: Any) -> dict:
-        if self._rpc_client is not None:
-            return self._rpc_client(method, params)
-        return self._default_rpc(method, params)
-
-    def _default_rpc(self, method: str, params: Any) -> dict:
+    def _rpc_sequence(self, requests: list[tuple[str, Any]], deadline: Optional[float] = None) -> list[dict]:
+        deadline = deadline if deadline is not None else time.monotonic() + self._timeout_seconds
+        if time.monotonic() >= deadline:
+            raise ConnectorTimeoutError("Codex CLI 采集超时。")
         if shutil.which(self._codex_bin) is None:
             raise ConnectorNotApplicableError("Codex CLI is not installed.")
 
@@ -329,31 +362,32 @@ class CodexCliRpcConnector:
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "clientInfo": {"name": "token-bi", "version": "1.1.2"},
+                        "clientInfo": {"name": "token-bi", "version": "1.1.3"},
                         "capabilities": {"experimentalApi": True},
                     },
                 },
             )
-            self._read_jsonrpc_response(process, request_id=1)
-            self._write_jsonrpc(
-                process,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": method,
-                    "params": params,
-                },
-            )
-            response = self._read_jsonrpc_response(process, request_id=2)
+            initialized = self._read_jsonrpc_response(process, request_id=1, deadline=deadline)
+            if "error" in initialized:
+                raise ScraperUnavailableError("Codex app-server 初始化失败。")
+            self._write_jsonrpc(process, {"jsonrpc": "2.0", "method": "initialized"})
+            results = []
+            for request_id, (method, params) in enumerate(requests, start=2):
+                self._write_jsonrpc(process, {
+                    "jsonrpc": "2.0", "id": request_id, "method": method, "params": params,
+                })
+                response = self._read_jsonrpc_response(process, request_id=request_id, deadline=deadline)
+                if "error" in response:
+                    raise ScraperUnavailableError("Codex app-server returned an RPC error.")
+                result = response.get("result")
+                if not isinstance(result, dict):
+                    raise AnalyticsPageChangedError("Codex app-server returned an unsupported payload.")
+                if method == "account/read" and result.get("requiresOpenaiAuth") and result.get("account") is None:
+                    raise SessionExpiredError("Codex CLI is not signed in. Please complete Codex login.")
+                results.append(result)
+            return results
         finally:
             self._stop_rpc_process(process)
-
-        if "error" in response:
-            raise ScraperUnavailableError("Codex app-server returned an RPC error.")
-        result = response.get("result")
-        if not isinstance(result, dict):
-            raise AnalyticsPageChangedError("Codex app-server returned an unsupported payload.")
-        return result
 
     def _write_jsonrpc(self, process: subprocess.Popen, request: dict) -> None:
         if process.stdin is None:
@@ -364,38 +398,43 @@ class CodexCliRpcConnector:
         except OSError as exc:
             raise ScraperUnavailableError("Codex app-server RPC is not writable.") from exc
 
-    def _read_jsonrpc_response(self, process: subprocess.Popen, request_id: int) -> dict:
+    def _read_jsonrpc_response(
+        self, process: subprocess.Popen, request_id: int, deadline: Optional[float] = None,
+    ) -> dict:
         if process.stdout is None:
             raise ScraperUnavailableError("Codex app-server RPC is not readable.")
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
         if process.stderr is not None:
             selector.register(process.stderr, selectors.EVENT_READ)
-        deadline = time.time() + self._timeout_seconds
-        stderr_tail = ""
+        deadline = deadline if deadline is not None else time.monotonic() + self._timeout_seconds
+        buffer = b""
         try:
-            while time.time() < deadline:
-                events = selector.select(timeout=0.1)
+            while time.monotonic() < deadline and selector.get_map():
+                events = selector.select(timeout=min(0.1, max(0, deadline - time.monotonic())))
                 for key, _ in events:
-                    line = key.fileobj.readline()
-                    if not line:
+                    # 按可读字节分帧，不能让 readline 等待半行而越过截止时间。
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
                         continue
                     if key.fileobj is process.stderr:
-                        stderr_tail = (stderr_tail + line)[-300:]
                         continue
-                    try:
-                        payload = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if payload.get("id") == request_id:
-                        return payload
-                if process.poll() is not None and not events:
-                    break
+                    buffer += chunk
+                    if len(buffer) > 4 * 1024 * 1024:
+                        raise AnalyticsPageChangedError("Codex RPC 响应超过大小限制。")
+                    while b"\n" in buffer:
+                        line, buffer = buffer.split(b"\n", 1)
+                        try:
+                            payload = json.loads(line)
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            continue
+                        if isinstance(payload, dict) and payload.get("id") == request_id:
+                            if time.monotonic() >= deadline:
+                                raise ConnectorTimeoutError("Codex app-server RPC 超时。")
+                            return payload
         finally:
             selector.close()
-        detail = redact_sensitive_text(stderr_tail.strip())
-        if detail:
-            raise ConnectorTimeoutError(f"Codex app-server RPC timed out: {detail}")
         raise ConnectorTimeoutError("Codex app-server RPC timed out.")
 
     def _stop_rpc_process(self, process: subprocess.Popen) -> None:
@@ -411,6 +450,9 @@ class CodexCliRpcConnector:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=1)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
     def _extract_account_identity(self, payload: dict) -> Optional[str]:
         account = payload.get("account")
@@ -608,6 +650,8 @@ def normalize_usage_payload(payload: dict, source_type: str, source_detail: str)
     account_identity = payload.get("account_masked_email")
     if isinstance(account_identity, str) and account_identity.strip():
         normalized["account_masked_email"] = account_identity.strip()
+    if isinstance(payload.get("account_identity_key"), str):
+        normalized["account_identity_key"] = payload["account_identity_key"]
     return normalized
 
 

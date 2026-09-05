@@ -4,11 +4,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
 
-"$PROJECT_ROOT/scripts/stop_server.sh" || true
-"$PROJECT_ROOT/scripts/stop_control_panel.sh" || true
+if [[ ! -x "$VENV_PYTHON" ]]; then
+  echo "缺少项目 Python 环境，未执行任何进程清理。" >&2
+  exit 1
+fi
 
-# Close Chrome workers that Token BI launched with project-owned profiles.
-pkill -f "$PROJECT_ROOT/runtime/contexts" 2>/dev/null || true
-
-echo "Token BI app services stopped."
+cd "$PROJECT_ROOT"
+exec "$VENV_PYTHON" -m scripts.control_cli --stop-dev all

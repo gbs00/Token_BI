@@ -68,7 +68,7 @@ Codex 官方 analytics 页面已删除 `5h` 额度统计。Token BI 已调整为
 - Mac App 原型：新增 `Token BI.app`，用户可双击 App 打开内嵌控制台，不再需要记住 `127.0.0.1:8790` 或手动执行脚本。
 - App 生命周期：`Token BI.app` 是本项目的总开关；关闭 App 时会停止控制台、停止 `8787` 主服务，并关闭 Token BI 管理的 Chrome worker，避免后台长期占用。
 - App 视觉：已按设计稿重绘 App icon，并将控制台升级为桌面 App 风格页面，包含状态卡、按钮组、入口列表、运行日志和底部状态栏。
-- 固定入口：副屏设备优先使用 `http://gbs00MacBook-Air-M2.local:8787/dashboard`，不再依赖会变化的局域网 IP。
+- 固定入口：副屏设备可使用 `http://gbs00MacBook-Air-M2.local:8787/dashboard`，主服务同时接收 IPv4 / IPv6；该入口依赖当前网络支持 Bonjour/mDNS，不支持时使用局域网 IP 备用入口。
 - 扫码自联：控制台新增 `扫码连接副屏`，可直接展示固定 `.local` 看板二维码，并提供局域网 IP 备用二维码。
 - 本地控制台：Mac 端可在 App 内直接管理控制页面，也可通过 `scripts/open_control_panel.command` 作为备用入口打开控制页。
 - 服务生命周期：Token BI 主服务启动时会尝试为 `active` 账号恢复或拉起对应浏览器 worker；App 退出时会释放本项目运行资源。

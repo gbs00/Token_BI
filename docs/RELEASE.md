@@ -10,8 +10,8 @@ Token BI release builds are local-first. Do not push commits, create tags, uploa
 
 Expected artifacts:
 
-- `src-tauri/target/release/bundle/macos/Token BI.app`
-- `src-tauri/target/release/bundle/dmg/Token BI_<version>_aarch64.dmg`
+- `src-tauri/target.noindex/release/bundle/macos/Token BI.app`
+- `src-tauri/target.noindex/release/bundle/dmg/Token BI_<version>_aarch64.dmg`
 
 This build is suitable for local validation. It is not notarized, so macOS Gatekeeper may warn users.
 

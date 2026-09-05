@@ -53,7 +53,8 @@ class ServiceContainer:
         )
 
     def startup(self) -> None:
-        for account in self.account_service.list_visible_accounts():
+        accounts = self.account_service.list_visible_accounts() if self.account_service.access_state()[0] else []
+        for account in accounts:
             if account.status.value != "active":
                 continue
             try:

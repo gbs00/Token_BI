@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from app.models.usage_snapshot import DashboardPayload, DashboardSummary, PageState
+from app.models.account import same_account_identity
 from app.services.browser_worker_service import LiveSessionRequiredError
 from app.services.latest_dashboard_store import LatestDashboardStore
 from app.services.scraper_service import (
@@ -22,10 +24,14 @@ from app.services.usage_connectors import (
     ConnectorRateLimitedError,
     ConnectorTimeoutError,
 )
-from app.services.usage_service import UsageService
+from app.services.usage_service import AccountIdentityChangedError, UsageService
 
 
 logger = logging.getLogger(__name__)
+
+
+class SyncCancelledError(Exception):
+    pass
 
 
 class UsageSyncCoordinator:
@@ -34,6 +40,7 @@ class UsageSyncCoordinator:
     FAILURE_RETRY_SECONDS = 60.0
     IMMEDIATE_RETRY_SECONDS = 2.0
     RATE_LIMIT_MIN_RETRY_SECONDS = 20.0
+    SYNC_TIMEOUT_SECONDS = 45.0
 
     def __init__(
         self,
@@ -50,6 +57,9 @@ class UsageSyncCoordinator:
         self._schedule_changed = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._syncing = False
+        self._generation = 0
+        self._fetch_thread: Optional[threading.Thread] = None
+        self._fetch_done = threading.Event()
         self._consecutive_failures = 0
 
         account = self._usage_service.current_account()
@@ -68,7 +78,7 @@ class UsageSyncCoordinator:
                 self._usage_service.empty_dashboard(),
                 last_attempt_at=None,
                 last_success_at=None,
-                next_sync_at=self._now(),
+                next_sync_at=self._now() if self._usage_service.access_state()[0] else None,
             )
 
     def start(self) -> None:
@@ -84,6 +94,8 @@ class UsageSyncCoordinator:
             self._thread.start()
 
     def stop(self) -> None:
+        with self._state_lock:
+            self._generation += 1
         self._stop_event.set()
         self._schedule_changed.set()
         thread = self._thread
@@ -91,51 +103,87 @@ class UsageSyncCoordinator:
             thread.join(timeout=1.0)
 
     def get_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
-        account = self._usage_service.current_account(account_id)
         with self._state_lock:
+            if not self._usage_service.access_state()[0]:
+                return self._usage_service.empty_dashboard()
+            account = self._usage_service.current_account(account_id)
             current = self._current
-        if account is None:
-            return current if current.account is None else self._usage_service.empty_dashboard()
-        if current.account is None or current.account.account_id != account.account_id:
-            restored = self._snapshot_store.load(account)
-            if restored is None:
-                current = self._with_schedule(
-                    self._usage_service.empty_dashboard(),
-                    last_attempt_at=None,
-                    last_success_at=None,
-                    next_sync_at=self._now(),
-                ).model_copy(update={"account": account})
-            else:
-                current = restored.model_copy(update={"state": PageState.STALE})
-            with self._state_lock:
+            if account is None:
+                return current if current.account is None else self._usage_service.empty_dashboard()
+            if not same_account_identity(current.account, account):
+                restored = self._snapshot_store.load(account)
+                if restored is None:
+                    current = self._with_schedule(
+                        self._usage_service.empty_dashboard(),
+                        last_attempt_at=None,
+                        last_success_at=None,
+                        next_sync_at=self._now(),
+                    ).model_copy(update={"account": account})
+                else:
+                    current = restored.model_copy(update={"state": PageState.STALE})
                 self._current = current
-        return current.model_copy(update={"account": account})
+            if (current.state == PageState.READY and current.summary.last_success_at
+                    and (self._now() - current.summary.last_success_at).total_seconds()
+                    > self.SUCCESS_INTERVAL_SECONDS + self.SYNC_TIMEOUT_SECONDS):
+                current = current.model_copy(update={
+                    "state": PageState.STALE,
+                    "message": "最新额度尚未同步，当前展示上次成功数据。",
+                })
+            return current.model_copy(update={"account": account})
 
     def refresh(self, account_id: Optional[str] = None) -> DashboardPayload:
+        if not self._usage_service.access_state()[0]:
+            return self._usage_service.empty_dashboard()
         with self._sync_condition:
             if self._syncing:
-                self._sync_condition.wait_for(lambda: not self._syncing)
+                completed = self._sync_condition.wait_for(
+                    lambda: not self._syncing, timeout=self.SYNC_TIMEOUT_SECONDS + 0.5,
+                )
+                if not completed:
+                    return self.get_dashboard(account_id).model_copy(update={
+                        "state": PageState.STALE if self.get_dashboard(account_id).metrics else PageState.ERROR,
+                        "message": "同步等待超时，Token BI 将自动重试。",
+                    })
                 return self.get_dashboard(account_id)
             self._syncing = True
 
+        with self._state_lock:
+            generation = self._generation
         try:
             return self._perform_refresh(account_id)
+        except Exception:
+            logger.error("usage_sync_commit_failed")
+            with self._state_lock:
+                if generation == self._generation:
+                    self._schedule_after_unhandled_error()
+                return self._current
         finally:
             with self._sync_condition:
                 self._syncing = False
                 self._sync_condition.notify_all()
 
     def clear(self, account_id: Optional[str] = None) -> None:
-        self._snapshot_store.clear(account_id)
         with self._state_lock:
+            self._generation += 1
+            self._snapshot_store.clear(account_id)
             self._consecutive_failures = 0
             self._current = self._with_schedule(
                 self._usage_service.empty_dashboard(),
                 last_attempt_at=None,
                 last_success_at=None,
-                next_sync_at=self._now(),
+                next_sync_at=self._now() if self._usage_service.access_state()[0] else None,
             )
         self._schedule_changed.set()
+
+    def disconnect(self) -> None:
+        with self._state_lock:
+            self._usage_service.set_access_enabled(False)
+            self.clear()
+
+    def resume(self) -> None:
+        with self._state_lock:
+            self._usage_service.set_access_enabled(True)
+            self.clear()
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -147,49 +195,66 @@ class UsageSyncCoordinator:
             try:
                 self.refresh()
             except Exception:
-                logger.exception("usage_sync_unhandled_error")
+                logger.error("usage_sync_unhandled_error")
                 self._schedule_after_unhandled_error()
 
     def _seconds_until_next_sync(self) -> float:
+        if not self._usage_service.access_state()[0]:
+            return self.FAILURE_RETRY_SECONDS
         with self._state_lock:
             next_sync_at = self._current.summary.next_sync_at
         if next_sync_at is None:
-            return 0.0
+            return self.FAILURE_RETRY_SECONDS
         return max(0.0, (next_sync_at - self._now()).total_seconds())
 
     def _perform_refresh(self, account_id: Optional[str]) -> DashboardPayload:
-        attempt_at = self._now()
-        try:
-            payload = self._usage_service.sync_dashboard(account_id)
-        except ScraperUnavailableError as exc:
-            failure = self._normalize_failure(exc)
-            if failure.immediate_retry and self._wait_for_retry(self.IMMEDIATE_RETRY_SECONDS):
-                attempt_at = self._now()
-                try:
-                    payload = self._usage_service.sync_dashboard(account_id)
-                except ScraperUnavailableError as retry_exc:
-                    return self._record_failure(
-                        self._normalize_failure(retry_exc),
-                        attempt_at,
-                        account_id,
-                    )
-            else:
-                return self._record_failure(failure, attempt_at, account_id)
-
-        completed_at = self._now()
-        ready = self._with_schedule(
-            payload.model_copy(update={"state": PageState.READY, "message": None}),
-            last_attempt_at=attempt_at,
-            last_success_at=completed_at,
-            next_sync_at=completed_at + timedelta(seconds=self.SUCCESS_INTERVAL_SECONDS),
-        )
         with self._state_lock:
+            generation = self._generation
+            enabled, revision = self._usage_service.access_state()
+        if not enabled:
+            return self.get_dashboard(account_id)
+        deadline = time.monotonic() + self.SYNC_TIMEOUT_SECONDS
+        attempt_at = self._now()
+        for attempt in range(2):
+            try:
+                payload = self._fetch_with_deadline(account_id, deadline, generation)
+                break
+            except SyncCancelledError:
+                return self.get_dashboard(account_id)
+            except Exception as exc:
+                failure = self._normalize_failure(exc)
+                if (attempt == 0 and failure.immediate_retry
+                        and deadline - time.monotonic() > self.IMMEDIATE_RETRY_SECONDS
+                        and self._wait_for_retry(self.IMMEDIATE_RETRY_SECONDS)):
+                    attempt_at = self._now()
+                    continue
+                with self._state_lock:
+                    if generation != self._generation:
+                        return self.get_dashboard(account_id)
+                    if isinstance(exc, AccountIdentityChangedError):
+                        self._snapshot_store.clear()
+                        self._current = self._usage_service.empty_dashboard()
+                    return self._record_failure(failure, attempt_at, account_id)
+
+        with self._state_lock:
+            if generation != self._generation:
+                return self.get_dashboard(account_id)
+            payload = self._usage_service.commit_dashboard(payload, revision)
+            if payload.state != PageState.READY:
+                return payload
+            completed_at = self._now()
+            ready = self._with_schedule(
+                payload.model_copy(update={"state": PageState.READY, "message": None}),
+                last_attempt_at=attempt_at,
+                last_success_at=completed_at,
+                next_sync_at=completed_at + timedelta(seconds=self.SUCCESS_INTERVAL_SECONDS),
+            )
             self._current = ready
             self._consecutive_failures = 0
-        try:
-            self._snapshot_store.save(ready)
-        except OSError:
-            logger.exception("usage_snapshot_persist_failed")
+            try:
+                self._snapshot_store.save(ready)
+            except OSError:
+                logger.error("usage_snapshot_persist_failed")
         self._schedule_changed.set()
         logger.info(
             "usage_sync_success connector=%s source=%s",
@@ -197,6 +262,35 @@ class UsageSyncCoordinator:
             ready.summary.source_type,
         )
         return ready
+
+    def _fetch_with_deadline(self, account_id: Optional[str], deadline: float, generation: int) -> DashboardPayload:
+        if self._fetch_thread is not None and self._fetch_thread.is_alive() and not self._fetch_done.is_set():
+            raise ConnectorTimeoutError("上次采集尚未结束。")
+        # 工作线程只采集，不写账号或缓存；超时结果不能越过提交边界。
+        done = threading.Event()
+        result: list = []
+        def collect() -> None:
+            try:
+                result.append(self._usage_service.prepare_dashboard(account_id))
+            except Exception as exc:
+                result.append(exc)
+            finally:
+                done.set()
+        self._fetch_done = done
+        self._fetch_thread = threading.Thread(target=collect, name="token-bi-usage-fetch", daemon=True)
+        self._fetch_thread.start()
+        while True:
+            if generation != self._generation or self._stop_event.is_set():
+                raise SyncCancelledError()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ConnectorTimeoutError("额度采集超过总时间上限。")
+            if done.wait(min(remaining, 0.05)):
+                if time.monotonic() > deadline:
+                    raise ConnectorTimeoutError("额度采集超过总时间上限。")
+                if isinstance(result[0], Exception):
+                    raise result[0]
+                return result[0]
 
     def _record_failure(
         self,
@@ -211,13 +305,16 @@ class UsageSyncCoordinator:
 
         next_sync_at = self._now() + timedelta(seconds=retry_seconds)
         account = self._usage_service.current_account(account_id)
+        if not same_account_identity(current.account, account):
+            current = self._usage_service.empty_dashboard()
+            self._snapshot_store.clear()
         if failure.category == ConnectorFailureCategory.AUTH_REQUIRED and account is not None:
             updated = self._usage_service.mark_account_expired(account.account_id)
             if updated is not None:
                 account = updated
 
         page_state = self._page_state_for_failure(failure.category, has_stale=bool(current.metrics))
-        message = self._public_message(failure.category)
+        message = self._public_message(failure.category, has_stale=bool(current.metrics))
         if current.metrics:
             failed = current.model_copy(
                 update={
@@ -255,7 +352,7 @@ class UsageSyncCoordinator:
         )
         return failed
 
-    def _normalize_failure(self, exc: ScraperUnavailableError) -> ConnectorFailure:
+    def _normalize_failure(self, exc: Exception) -> ConnectorFailure:
         if isinstance(exc, ConnectorChainError):
             return exc.primary_failure
         category = ConnectorFailureCategory.INTERNAL_ERROR
@@ -306,13 +403,17 @@ class UsageSyncCoordinator:
                 last_success_at=self._current.summary.last_success_at,
                 next_sync_at=self._now() + timedelta(seconds=self.FAILURE_RETRY_SECONDS),
             )
+            self._current = self._current.model_copy(update={
+                "state": PageState.STALE if self._current.metrics else PageState.ERROR,
+                "message": "同步暂时失败，Token BI 将自动重试。",
+            })
 
     def _with_schedule(
         self,
         payload: DashboardPayload,
         last_attempt_at: Optional[datetime],
         last_success_at: Optional[datetime],
-        next_sync_at: datetime,
+        next_sync_at: Optional[datetime],
     ) -> DashboardPayload:
         summary = payload.summary.model_copy(
             update={
@@ -341,13 +442,14 @@ class UsageSyncCoordinator:
             return PageState.REAUTH_REQUIRED
         return PageState.STALE if has_stale else PageState.ERROR
 
-    def _public_message(self, category: ConnectorFailureCategory) -> str:
+    def _public_message(self, category: ConnectorFailureCategory, has_stale: bool = False) -> str:
         if category == ConnectorFailureCategory.AUTH_REQUIRED:
             return "未检测到可用的 Codex 登录态，请在 Codex App、CLI 或网页端完成登录。"
         if category == ConnectorFailureCategory.RATE_LIMITED:
             return "Codex 额度接口暂时限流，Token BI 将自动重试。"
         if category == ConnectorFailureCategory.SOURCE_CHANGED:
-            return "官方额度数据格式发生变化，已保留上次成功数据。"
+            return ("官方额度数据格式发生变化，已保留上次成功数据。" if has_stale else
+                    "账号或官方额度数据格式发生变化，等待当前账号的有效额度。")
         if category in {
             ConnectorFailureCategory.WEB_SESSION_INACTIVE,
             ConnectorFailureCategory.NOT_APPLICABLE,

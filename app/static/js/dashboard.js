@@ -1,11 +1,12 @@
 (function () {
   var localPollIntervalMs = 15000;
-  var retryIntervalMs = 15000;
   var ringCircumference = 263.89378290154264;
   var timerId = null;
   var countdownTimerId = null;
   var toastTimerId = null;
   var syncing = false;
+  var activeRequest = null;
+  var requestSerial = 0;
 
   function applyStandaloneMode() {
     var isStandalone =
@@ -269,6 +270,8 @@
     if (!payload) return;
     if (payload.account && payload.account.account_id) {
       document.body.setAttribute("data-dashboard-account-id", payload.account.account_id);
+    } else {
+      document.body.removeAttribute("data-dashboard-account-id");
     }
     var accountName = document.querySelector("[data-account-name]");
     if (accountName) accountName.textContent = payload.account && payload.account.masked_email ? payload.account.masked_email : "未登录";
@@ -276,9 +279,7 @@
     if (sourceLabelNode) sourceLabelNode.textContent = sourceLabel(payload.summary && payload.summary.source_type);
     var sourceDetailNode = document.querySelector("[data-source-detail]");
     if (sourceDetailNode) {
-      sourceDetailNode.textContent = payload.summary && payload.summary.source_detail && payload.summary.source_detail !== "unknown"
-        ? payload.summary.source_detail
-        : (payload.summary && payload.summary.updated_at ? "已连接" : "待检查");
+      sourceDetailNode.textContent = payload.state === "ready" ? "已连接" : "待同步";
     }
     var sourceDot = document.querySelector("[data-source-dot]");
     if (sourceDot) sourceDot.className = "health-dot state-" + (payload.state || "empty");
@@ -298,6 +299,11 @@
     normalizedMetrics.forEach(function (metric) { updateMetric(metric.metric_type, metric); });
     var nextSyncAt = payload.summary && payload.summary.next_sync_at;
     if (nextSyncAt) startCountdown(new Date(nextSyncAt).getTime(), "");
+    else {
+      window.clearInterval(countdownTimerId);
+      var countdown = document.querySelector("[data-refresh-countdown]");
+      if (countdown) countdown.textContent = "--:--";
+    }
   }
 
   function startCountdown(deadlineMs, prefix) {
@@ -321,24 +327,61 @@
   async function fetchDashboard(options) {
     var forceRefresh = Boolean(options && options.forceRefresh);
     if (forceRefresh && syncing) return;
+    if (activeRequest) {
+      if (!forceRefresh && !(options && options.resume)) return;
+      if (activeRequest.forceRefresh) return;
+      activeRequest.cancel();
+    }
+    window.clearTimeout(timerId);
+    var serial = ++requestSerial;
+    var controller = window.AbortController ? new AbortController() : null;
+    var timeoutId;
+    var timeoutMs = forceRefresh ? 50000 : 8000;
+    var timeout = new Promise(function (_resolve, reject) {
+      var cancel = function () {
+        if (controller) controller.abort();
+        reject(new Error("请求超时或已取消"));
+      };
+      activeRequest = { cancel: cancel, forceRefresh: forceRefresh };
+      timeoutId = window.setTimeout(cancel, timeoutMs);
+    });
     if (forceRefresh) setSyncing(true);
     try {
-      var response = await fetch(dashboardApiUrl(forceRefresh), {
+      var request = fetch(dashboardApiUrl(forceRefresh), {
         method: forceRefresh ? "POST" : "GET",
         headers: { Accept: "application/json" },
-        cache: "no-store"
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined
+      }).then(function (response) {
+        if (!response.ok) throw new Error("Dashboard refresh failed: " + response.status);
+        return response.json();
       });
-      if (!response.ok) throw new Error("Dashboard refresh failed: " + response.status);
-      var payload = await response.json();
+      var payload = await Promise.race([request, timeout]);
+      if (serial !== requestSerial) return;
+      if (!payload || !payload.state || !Array.isArray(payload.metrics)) throw new Error("额度响应无效");
       updateDashboard(payload);
-      scheduleRefresh(localPollIntervalMs, "");
-      if (forceRefresh) showToast("额度已同步，数据源 " + sourceLabel(payload.summary && payload.summary.source_type), false);
+      if (forceRefresh) {
+        if (payload.state === "ready" && payload.metrics.length) {
+          showToast("额度已同步，数据源 " + sourceLabel(payload.summary && payload.summary.source_type), false);
+        } else {
+          showToast(payload.message || "本次同步未成功，将自动重试", true);
+        }
+      }
     } catch (error) {
+      if (serial !== requestSerial) return;
       setMessageBanner("连接中断，Token BI 会自动重试并保留上次成功数据。");
-      scheduleRefresh(retryIntervalMs, "重试 ");
+      var sourceDot = document.querySelector("[data-source-dot]");
+      var sourceDetail = document.querySelector("[data-source-detail]");
+      if (sourceDot) sourceDot.className = "health-dot state-stale";
+      if (sourceDetail) sourceDetail.textContent = "连接中断";
       if (forceRefresh) showToast("同步失败，已保留上次成功数据", true);
     } finally {
-      if (forceRefresh) setSyncing(false);
+      window.clearTimeout(timeoutId);
+      if (serial === requestSerial) {
+        activeRequest = null;
+        if (forceRefresh) setSyncing(false);
+        scheduleRefresh(localPollIntervalMs, "");
+      }
     }
   }
 
@@ -349,8 +392,16 @@
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible") fetchDashboard();
+    if (document.visibilityState === "visible") fetchDashboard({ resume: true });
   });
+  window.addEventListener("online", function () { fetchDashboard({ resume: true }); });
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) fetchDashboard({ resume: true });
+  });
+  window.setInterval(function () {
+    var lastSync = document.querySelector("[data-last-sync][data-updated-at]");
+    if (lastSync) lastSync.textContent = formatLastSync(new Date(lastSync.getAttribute("data-updated-at")));
+  }, 1000);
 
   applyStandaloneMode();
   bindRefreshButton();

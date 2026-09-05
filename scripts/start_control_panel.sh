@@ -5,10 +5,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+APP_DATA_DIR="${TOKEN_BI_APP_DATA_DIR:-$PROJECT_ROOT}"
+export TOKEN_BI_APP_DATA_DIR="$APP_DATA_DIR"
 CONTROL_HOST="${TOKEN_BI_CONTROL_HOST:-127.0.0.1}"
 CONTROL_PORT="${TOKEN_BI_CONTROL_PORT:-8790}"
-PID_FILE="$PROJECT_ROOT/runtime/control_panel.pid"
-LOG_DIR="$PROJECT_ROOT/runtime/logs"
+PID_FILE="$APP_DATA_DIR/runtime/control_panel.pid"
+LOG_DIR="$APP_DATA_DIR/runtime/logs"
 LOG_FILE="$LOG_DIR/control_panel.log"
 CONTROL_URL="http://$CONTROL_HOST:$CONTROL_PORT/"
 
@@ -29,7 +31,8 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-nohup "$VENV_PYTHON" "$PROJECT_ROOT/scripts/control_panel.py" >"$LOG_FILE" 2>&1 &
+cd "$PROJECT_ROOT"
+nohup "$VENV_PYTHON" -m scripts.control_cli --host "$CONTROL_HOST" --port "$CONTROL_PORT" --main-port "${TOKEN_BI_PORT:-8787}" >"$LOG_FILE" 2>&1 &
 CONTROL_PID=$!
 echo "$CONTROL_PID" >"$PID_FILE"
 

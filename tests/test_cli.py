@@ -1,15 +1,17 @@
 import json
+import plistlib
 import re
+import socket
 from pathlib import Path
 
 from app.main import create_app
-from app.cli import build_parser
+from app.cli import build_parser, create_dual_stack_listener
 from scripts import control_panel
 from scripts.control_cli import build_parser as build_control_parser
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "1.1.2"
+EXPECTED_VERSION = "1.1.3"
 
 
 def test_control_cli_has_control_panel_arguments():
@@ -22,6 +24,31 @@ def test_cli_has_main_server_command():
     assert args.command == "main-server"
     assert args.host == "0.0.0.0"
     assert args.port == 8787
+
+
+def test_dual_stack_listener_accepts_ipv4_and_ipv6() -> None:
+    listener = create_dual_stack_listener(0)
+    port = listener.getsockname()[1]
+    clients = []
+    accepted = []
+    try:
+        ipv4 = socket.create_connection(("127.0.0.1", port), timeout=1)
+        clients.append(ipv4)
+        connection, _ = listener.accept()
+        accepted.append(connection)
+
+        ipv6 = socket.create_connection(("::1", port), timeout=1)
+        clients.append(ipv6)
+        connection, _ = listener.accept()
+        accepted.append(connection)
+
+        assert listener.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 0
+    finally:
+        for connection in accepted:
+            connection.close()
+        for client in clients:
+            client.close()
+        listener.close()
 
 
 def test_control_panel_backend_command_uses_module_in_dev(monkeypatch):
@@ -39,17 +66,22 @@ def test_control_panel_backend_command_uses_executable_when_frozen(monkeypatch):
     assert control_panel._backend_command(["health"]) == ["/tmp/token-bi-backend", "health"]
 
 
-def test_release_version_metadata_matches_v111() -> None:
+def test_release_version_metadata_matches_v113() -> None:
     package_json = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     tauri_config = json.loads(
         (PROJECT_ROOT / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8")
     )
     cargo_toml = (PROJECT_ROOT / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
+    info_plist = plistlib.loads((PROJECT_ROOT / "src-tauri" / "Info.plist").read_bytes())
 
     assert package_json["version"] == EXPECTED_VERSION
     assert package_lock["version"] == EXPECTED_VERSION
     assert package_lock["packages"][""]["version"] == EXPECTED_VERSION
     assert tauri_config["version"] == EXPECTED_VERSION
-    assert re.search(r'^version = "1\.1\.2"$', cargo_toml, flags=re.MULTILINE)
+    assert tauri_config["bundle"]["macOS"]["infoPlist"] == "Info.plist"
+    assert re.search(r'^version = "' + re.escape(EXPECTED_VERSION) + r'"$', cargo_toml, flags=re.MULTILINE)
+    assert 'tauri-plugin-single-instance = "2"' in cargo_toml
+    assert "target.noindex" in package_json["scripts"]["app:build"]
+    assert info_plist["NSLocalNetworkUsageDescription"]
     assert create_app().version == EXPECTED_VERSION

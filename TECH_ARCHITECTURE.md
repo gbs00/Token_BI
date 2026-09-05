@@ -268,6 +268,7 @@ Token_BI/
 - 产品化 App 内通过 `token-bi-backend main-server` 管理主服务
 - 开发目录仍保留 `scripts/open_control_panel.command` 作为备用入口
 - 主服务优先使用 `8787`，若被占用则在 `8788-8877` 内选择第一个可用端口
+- macOS 默认通过单个 IPv6 双栈 socket 同时接收 IPv4 与 IPv6，避免 `.local` 在副屏优先解析为 IPv6 时连接失败；IPv6 不可用时回退 IPv4
 - 当前实际端口写入运行态文件，供控制台、二维码、App shutdown 和排障使用
 - 启动主服务失败时必须清理 PID 文件和 runtime 状态，避免控制台进入“假运行中”
 - 端口可用性判断需同时覆盖本机连接探测和 `0.0.0.0` 绑定尝试，避免局域网监听端口误判
@@ -320,7 +321,7 @@ Token_BI/
 
 - `/` 固定重定向到 `/dashboard`
 - 单账号场景下无需在 URL 中携带 `account_id`
-- 当局域网 IP 变化时，`.local` 地址仍应保持稳定
+- 当局域网 IP 变化时，`.local` 地址本身保持不变，但副屏和路由器必须允许 Bonjour/mDNS 组播解析
 - 控制台可为固定入口生成二维码，便于手机、平板、旧电脑等副屏设备快速接入
 - 当副屏设备不支持 `.local` 解析时，控制台提供局域网 IP 二维码作为备用入口
 - 如果 `8787` 被占用，固定入口会同步使用实际 fallback 端口，例如 `http://<LocalHostName>.local:8788/dashboard`

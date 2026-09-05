@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import json
 import base64
+import subprocess
+import sys
+import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime
 
 import pytest
@@ -109,6 +114,116 @@ def _build_unsigned_jwt(payload: dict) -> str:
         return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
     return f"{encode(header)}.{encode(payload)}.signature"
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_rpc_partial_line_cannot_bypass_deadline(stream) -> None:
+    connector = CodexCliRpcConnector(timeout_seconds=0.1)
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-c",
+         "import sys,time; sys." + stream + ".write('{\\\"id\\\":1'); sys." + stream
+         + ".flush(); time.sleep(0.8); print(',\\\"result\\\":{}}')"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True,
+    )
+    start = time.monotonic()
+    try:
+        with pytest.raises(ConnectorTimeoutError):
+            connector._read_jsonrpc_response(process, request_id=1)
+        assert time.monotonic() - start < 0.5
+    finally:
+        connector._stop_rpc_process(process)
+
+
+def test_rpc_multiple_lines_in_one_read_are_not_lost() -> None:
+    connector = CodexCliRpcConnector(timeout_seconds=0.5)
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-c", "print('{}\\n{\\\"id\\\":1,\\\"result\\\":{\\\"ok\\\":true}}')"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert connector._read_jsonrpc_response(process, 1)["result"]["ok"] is True
+    finally:
+        connector._stop_rpc_process(process)
+
+
+def test_cli_uses_one_process_for_identity_and_quota(test_settings, monkeypatch):
+    from app.services import usage_connectors
+    script = """
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request['method']
+    if method == 'account/read':
+        result = {'account': {'email': 'user@example.com'}}
+    elif method == 'account/rateLimits/read':
+        result = {'weekly_remaining_pct': 80}
+    else:
+        result = {}
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+"""
+    popen = subprocess.Popen
+    children = []
+    def start_fake(_args, **kwargs):
+        child = popen([sys.executable, "-u", "-c", script], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(usage_connectors.subprocess, "Popen", start_fake)
+    monkeypatch.setattr(usage_connectors.shutil, "which", lambda _bin: "/synthetic/codex")
+    result = CodexCliRpcConnector(timeout_seconds=1).fetch_usage(_build_account(test_settings))
+    assert len(children) == 1
+    assert children[0].poll() is not None
+    assert result.payload["windows"][0]["remaining_pct"] == 80
+
+
+def test_oauth_deadline_covers_slow_response_body(monkeypatch):
+    release = threading.Event()
+    class SlowHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            try:
+                while not release.is_set():
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    release.wait(0.01)
+            except OSError:
+                pass
+        def log_message(self, *_args):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    try:
+        start = time.monotonic()
+        with pytest.raises(ConnectorTimeoutError):
+            CodexOAuthConnector()._default_http_get(f"http://127.0.0.1:{server.server_port}", {}, 0.2)
+        assert time.monotonic() - start < 0.8
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        worker.join(1)
+
+
+def test_oauth_identity_key_distinguishes_same_masked_emails(test_settings):
+    keys = []
+    for email in ("user.one@example.com", "user.two@example.com"):
+        auth_path = test_settings.project_root / "test-auth.json"
+        auth_path.write_text(json.dumps({"tokens": {
+            "access_token": _build_unsigned_jwt({"email": email}),
+        }}), encoding="utf-8")
+        connector = CodexOAuthConnector(auth_paths=[auth_path], http_get=lambda *_: {
+            "weekly_remaining_pct": 82,
+        })
+        payload = connector.fetch_usage(_build_account(test_settings)).payload
+        assert payload["account_masked_email"] == "user****@example.com"
+        assert email not in json.dumps(payload, default=str)
+        keys.append(payload["account_identity_key"])
+    assert keys[0] != keys[1]
 
 
 def test_local_codex_connector_reads_snapshot(test_settings) -> None:
@@ -477,7 +592,7 @@ def test_cli_rpc_connector_reads_account_and_rate_limit_windows(test_settings) -
 
     result = connector.fetch_usage(account)
 
-    assert seen_methods == ["account/read", "account/rateLimits/read"]
+    assert seen_methods == ["account/read", "account/rateLimits/read", "account/read"]
     assert result.connector_name == "codex_cli_rpc"
     assert result.source_type == "cli_rpc"
     assert result.payload["account_masked_email"] == "some****@example.com"
@@ -495,3 +610,14 @@ def test_web_session_connector_uses_browser_worker(test_settings) -> None:
     assert result.source_detail == "network_response"
     assert result.source_type == "web_session"
     assert result.payload["windows"][0]["remaining_pct"] == 88
+
+
+def test_cli_rejects_account_change_during_quota_read(test_settings):
+    emails = iter(["first@example.com", "second@example.com"])
+    def rpc(method, _params):
+        if method == "account/read":
+            return {"account": {"email": next(emails)}}
+        return {"weekly_remaining_pct": 10}
+    connector = CodexCliRpcConnector(rpc_client=rpc)
+    with pytest.raises(ConnectorNetworkError, match="账号在采集期间发生变化"):
+        connector.fetch_usage(_build_account(test_settings))

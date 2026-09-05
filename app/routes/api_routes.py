@@ -6,14 +6,44 @@ from pathlib import Path
 import shutil
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.models.account import AccountStatus, CreateAccountRequest
 from app.models.usage_snapshot import PageState
+from app.services.usage_connectors import mask_identity
+from app.http_access import allows_local_management
 
 
-router = APIRouter(prefix="/api/v1")
+def require_api_access(request: Request) -> None:
+    public_routes = {
+        ("GET", "/api/v1/dashboard"),
+        ("POST", "/api/v1/dashboard/refresh"),
+        ("GET", "/api/v1/health"),
+    }
+    origin = request.headers.get("origin")
+    if (request.method, request.url.path.rstrip("/")) in public_routes:
+        if request.method == "POST" and origin and origin != str(request.base_url).rstrip("/"):
+            raise HTTPException(status_code=403, detail="不允许跨站发起同步。")
+        return
+    if not allows_local_management(
+        request.client.host if request.client else "", request.url.hostname or "", origin,
+    ):
+        raise HTTPException(status_code=403, detail="账号和运维操作仅允许在 Mac 本机控制台执行。")
+
+
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_access)])
 MAIN_SERVICE_MARKER = "token-bi-main-service"
+
+
+def _public_dashboard(payload) -> dict:
+    result = payload.model_dump(mode="json")
+    if payload.account is not None:
+        result["account"] = {
+            "account_id": payload.account.account_id,
+            "masked_email": mask_identity(payload.account.masked_email),
+            "status": payload.account.status.value,
+        }
+    return result
 
 
 def _chrome_available() -> bool:
@@ -38,6 +68,8 @@ def _chrome_available() -> bool:
 @router.get("/accounts")
 def list_accounts(request: Request) -> dict[str, list[dict[str, str]]]:
     container = request.app.state.container
+    if not container.account_service.access_state()[0]:
+        return {"items": []}
     items = [
         {
             "account_id": account.account_id,
@@ -64,14 +96,12 @@ def health(request: Request) -> dict:
 @router.get("/runtime-status")
 def runtime_status(request: Request) -> dict:
     container = request.app.state.container
-    account = container.account_service.preferred_account()
-    cached = container.usage_sync_coordinator.get_dashboard(
-        account.account_id if account is not None else None
-    )
-    usage = None
-    if cached.metrics:
-        usage = {
+    cached = container.usage_sync_coordinator.get_dashboard()
+    account = cached.account
+    usage = {
             "state": cached.state.value,
+            "message": cached.message,
+            "has_data": bool(cached.metrics),
             "updated_at": cached.summary.last_success_at or cached.summary.updated_at,
             "source_updated_at": cached.summary.updated_at,
             "last_attempt_at": cached.summary.last_attempt_at,
@@ -86,6 +116,7 @@ def runtime_status(request: Request) -> dict:
         "pid": os.getpid(),
         "account": account.model_dump(mode="json") if account is not None else None,
         "usage": usage,
+        "access_enabled": container.account_service.access_state()[0],
     }
 
 
@@ -93,7 +124,7 @@ def runtime_status(request: Request) -> dict:
 def get_dashboard(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
     payload = container.usage_sync_coordinator.get_dashboard(account_id=account_id)
-    return payload.model_dump(mode="json")
+    return _public_dashboard(payload)
 
 
 @router.post("/accounts", status_code=status.HTTP_201_CREATED)
@@ -150,6 +181,7 @@ def reauth_account(request: Request, account_id: str) -> dict:
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
+    container.usage_sync_coordinator.resume()
     context_dir = container.session_service.ensure_context_dir(account_id)
     container.account_service.update_account_status(account_id=account_id, status="pending")
     session = container.browser_worker_service.start_login_session(
@@ -167,6 +199,22 @@ def reauth_account(request: Request, account_id: str) -> dict:
 @router.post("/account-session/login")
 def login_account_session(request: Request) -> dict:
     container = request.app.state.container
+    container.usage_sync_coordinator.resume()
+    local_available = any(
+        (connector.name == "codex_oauth" and connector.auth_available())
+        or (connector.name == "codex_cli_rpc" and connector.cli_available())
+        for connector in container.usage_connector_manager.connectors
+    )
+    if local_available:
+        payload = container.usage_sync_coordinator.refresh()
+        if payload.state == PageState.READY:
+            return {
+                "ok": True, "action": "resume", "next_button_label": "退出账号",
+                "account": payload.account.model_dump(mode="json"), "session": None,
+                "message": "已恢复账号接入，并同步本机 Codex 额度。",
+            }
+        if payload.state != PageState.REAUTH_REQUIRED:
+            return {"ok": False, "action": "resume", "session": None, "message": payload.message}
     account = container.account_service.preferred_account()
     if account is None:
         account = container.account_service.create_account(CreateAccountRequest())
@@ -184,11 +232,13 @@ def login_account_session(request: Request) -> dict:
         context_dir=context_dir,
     )
     return {
+        "ok": session.state.value != "error",
         "action": "login",
         "next_button_label": "登录账号",
         "account": account.model_dump(mode="json"),
         "session": session.model_dump(mode="json"),
-        "message": "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。",
+        "message": ("未能打开登录窗口，请检查 Chrome 后重试。" if session.state.value == "error" else
+                    "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。"),
     }
 
 
@@ -196,18 +246,19 @@ def login_account_session(request: Request) -> dict:
 def logout_account_session(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
     account = container.account_service.preferred_account(account_id)
+    # 先撤销接入并使在途结果失效，再清理本应用的账号与浏览器目录。
+    container.usage_sync_coordinator.disconnect()
     if account is None:
         return {
             "action": "logout",
             "account_id": None,
             "next_button_label": "登录账号",
-            "message": "当前没有已登录账号。",
+            "message": "已暂停 Token BI 账号接入，本机 Codex 登录态保持不变。",
         }
 
     container.browser_worker_service.close_session(account.account_id)
     deleted = container.account_service.delete_account(account.account_id)
     container.session_service.delete_context(account.account_id)
-    container.usage_sync_coordinator.clear(account.account_id)
     if deleted is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
@@ -218,6 +269,7 @@ def logout_account_session(request: Request, account_id: Optional[str] = None) -
         "message": (
             "已清除 Token BI 账号记录和专用 Web 登录态。"
             "本机 Codex OAuth / CLI 登录态不会被退出。"
+            "自动读取已暂停，点击登录账号后恢复接入。"
         ),
     }
 
@@ -326,6 +378,4 @@ def diagnostics(request: Request) -> dict:
 def refresh_dashboard(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
     payload = container.usage_sync_coordinator.refresh(account_id=account_id)
-    if payload.state == PageState.READY and payload.account is not None:
-        container.browser_worker_service.minimize_session(payload.account.account_id)
-    return payload.model_dump(mode="json")
+    return _public_dashboard(payload)

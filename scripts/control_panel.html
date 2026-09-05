@@ -512,7 +512,7 @@
 
     <div id="accountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
       <section class="modal">
-        <div class="modal-head"><div><h2 id="accountModalTitle">退出当前账号？</h2><p class="modal-copy">退出后将清理当前会话缓存；再次查看额度前需要重新完成 Codex 登录授权。</p></div></div>
+        <div class="modal-head"><div><h2 id="accountModalTitle">退出当前账号？</h2><p class="modal-copy">退出后清理 Token BI 的账号与会话缓存，并暂停自动读取。Codex App 和 CLI 的登录不受影响；点击登录账号可恢复接入。</p></div></div>
         <div class="modal-actions"><button class="btn btn-secondary" data-close="accountModal">取消</button><button class="btn btn-danger" id="confirmLogoutButton">退出账号</button></div>
       </section>
     </div>
@@ -533,6 +533,9 @@
         var latestRunning = false;
         var primaryAction = "dashboard";
         var toastTimer = null;
+        var statusRequest = null;
+        var latestHealthy = false;
+        var actionInProgress = false;
 
         function byId(id) { return document.getElementById(id); }
 
@@ -600,13 +603,20 @@
           latestPayload = payload;
           latestUrls = payload.urls || {};
           latestRunning = Boolean(payload.running);
+          latestHealthy = payload.healthy === true;
           var accountActionLabel = payload.account_action_label || "登录账号";
           var hasActiveAccount = accountActionLabel === "退出账号";
           var usage = payload.usage || null;
+          var usageReady = latestHealthy && usage && usage.state === "ready";
+          var usageStates = {
+            stale: "待更新", reauth_required: "需要登录", rate_limited: "暂时限流",
+            source_changed: "数据格式变化", error: "同步失败", empty: "等待同步"
+          };
+          var usageLabel = usageReady ? "已连接" : (!latestHealthy ? "未连接" : usageStates[usage && usage.state] || "待检查");
           var logText = payload.log_tail || "";
 
-          byId("serverState").textContent = latestRunning ? "服务运行中 · 看板可用" : "主服务未启动 · 看板暂不可用";
-          setDot(byId("serverIcon"), latestRunning ? "success" : "warning");
+          byId("serverState").textContent = latestHealthy ? "服务运行中 · 本机看板就绪" : (latestRunning ? "主服务未响应 · 看板暂不可用" : "主服务未启动 · 看板暂不可用");
+          setDot(byId("serverIcon"), latestHealthy ? "success" : "warning");
           byId("serviceActionBtn").className = latestRunning ? "btn btn-danger" : "btn btn-primary";
           byId("serviceActionLabel").textContent = payload.service_action_label || (latestRunning ? "关闭服务" : "开启服务");
           setServiceIcon(latestRunning);
@@ -617,34 +627,34 @@
             byId("accountStatus").textContent = payload.account.status === "active" ? "已连接 Codex 登录态" : (payload.account.status || "等待授权");
           } else {
             byId("accountState").textContent = "未登录";
-            byId("accountStatus").textContent = "需要完成 Codex 登录授权";
+            byId("accountStatus").textContent = payload.access_enabled === false ? "自动读取已暂停，登录账号可恢复" : "需要完成 Codex 登录授权";
           }
 
           byId("dataSourceValue").textContent = usage ? sourceLabel(usage.source_type) : "等待同步";
           byId("dataSourceState").textContent = usage
-            ? (usage.source_detail || usage.connector_name || "已获取官方额度")
+            ? (usageReady ? usage.source_detail || usage.connector_name || "已获取官方额度" : usage.message || "等待有效额度数据")
             : String(payload.data_source_status || "数据源：等待同步").replace(/^数据源：/, "");
-          byId("sourceBadge").textContent = usage ? "已连接" : "待检查";
-          byId("sourceBadge").className = usage ? "pill" : "pill warning";
+          byId("sourceBadge").textContent = usageLabel;
+          byId("sourceBadge").className = usageReady ? "pill" : "pill warning";
 
           byId("dashboardPort").textContent = payload.port || "--";
-          byId("dashboardState").textContent = latestRunning ? "局域网内可访问" : "服务启动后可用";
+          byId("dashboardState").textContent = latestHealthy ? "本机入口就绪，副屏请扫码验证" : (latestRunning ? "主服务未响应" : "服务启动后可用");
           byId("lastRefreshValue").textContent = formatSyncTime(usage && usage.updated_at);
-          byId("lastRefreshState").textContent = usage ? "官方额度已同步" : "等待首次同步";
+          byId("lastRefreshState").textContent = usageReady ? "官方额度已同步" : (usage && usage.updated_at ? "上次成功数据 · " + usageLabel : usageLabel);
           byId("sidecarDetail").textContent = "127.0.0.1:" + (payload.control_port || 8790) + " · healthy";
 
           primaryAction = hasActiveAccount ? "dashboard" : "account";
           byId("operationTitle").textContent = hasActiveAccount ? "打开副屏看板" : "登录 Codex 账号";
           byId("primaryActionLabel").textContent = hasActiveAccount ? "打开看板" : "登录账号";
-          byId("openDashboardBtn").disabled = hasActiveAccount && !latestRunning;
+          byId("openDashboardBtn").disabled = hasActiveAccount && !latestHealthy;
           byId("dashboardActionHint").textContent = !hasActiveAccount
             ? "完成登录授权后，Token BI 将自动识别可用数据源。"
-            : (latestRunning ? "入口已就绪，可在本机或副屏查看当前额度。" : "请先开启主服务，再打开副屏看板。");
+            : (latestHealthy ? "本机入口已就绪，副屏连接取决于当前网络。" : payload.health_error || "请先开启主服务，再打开副屏看板。");
 
-          setDot(byId("mainServiceDot"), latestRunning ? "success" : "");
-          byId("mainServiceDetail").textContent = "0.0.0.0:" + (payload.port || "--") + " · " + (latestRunning ? "dashboard ready" : "waiting");
-          byId("mainServiceState").textContent = latestRunning ? "运行中" : "已停止";
-          byId("mainServiceState").className = "service-state" + (latestRunning ? " success" : "");
+          setDot(byId("mainServiceDot"), latestHealthy ? "success" : "warning");
+          byId("mainServiceDetail").textContent = "端口 " + (payload.port || "--") + " · " + (latestHealthy ? "状态接口正常" : "等待服务响应");
+          byId("mainServiceState").textContent = latestHealthy ? "运行中" : (latestRunning ? "未响应" : "已停止");
+          byId("mainServiceState").className = "service-state" + (latestHealthy ? " success" : " warning");
           byId("loginState").textContent = hasActiveAccount ? "待命" : "需要登录";
           byId("loginState").className = "service-state warning";
           byId("loginMeta").textContent = hasActiveAccount ? "仅登录时拉起，用完自动弱化" : "未检测到可用的 Codex 账号";
@@ -655,19 +665,50 @@
           renderLogPreview(logText);
         }
 
-        async function readStatus() {
-          var response = await fetch("/api/status", { cache: "no-store" });
-          if (!response.ok) throw new Error("状态读取失败");
-          return await response.json();
+        async function requestJson(path, method, timeoutMs) {
+          var controller = window.AbortController ? new AbortController() : null;
+          var timer;
+          try {
+            return await Promise.race([
+              fetch(path, { method: method, cache: "no-store", signal: controller ? controller.signal : undefined })
+                .then(function (response) {
+                  if (!response.ok) throw new Error("请求失败：" + response.status);
+                  return response.json();
+                }),
+              new Promise(function (_resolve, reject) {
+                timer = window.setTimeout(function () {
+                  if (controller) controller.abort();
+                  reject(new Error("请求超时，请重试"));
+                }, timeoutMs);
+              })
+            ]);
+          } finally { window.clearTimeout(timer); }
+        }
+
+        function readStatus() {
+          return requestJson("/api/status", "GET", 12000);
         }
 
         async function refreshStatus() {
-          var payload = await readStatus();
-          renderStatus(payload);
-          return payload;
+          if (actionInProgress) return null;
+          if (statusRequest) return statusRequest;
+          statusRequest = readStatus().then(function (payload) {
+            if (!actionInProgress) renderStatus(payload);
+            return payload;
+          }).catch(function (error) {
+            byId("serverState").textContent = "控制台连接中断，正在重试";
+            setDot(byId("serverIcon"), "warning");
+            byId("sourceBadge").textContent = "待检查";
+            byId("sourceBadge").className = "pill warning";
+            byId("lastRefreshState").textContent = "无法确认最新同步状态";
+            throw error;
+          }).finally(function () { statusRequest = null; });
+          return statusRequest;
         }
 
         async function postAction(path, button, pendingLabel) {
+          if (actionInProgress) return { ok: false, message: "请等待当前操作完成" };
+          actionInProgress = true;
           var actionButton = button && button.tagName === "BUTTON" ? button : (button && button.closest ? button.closest("button") : null);
           var originalLabel = button ? button.textContent : "";
           if (actionButton) {
@@ -675,10 +716,8 @@
             if (pendingLabel) button.textContent = pendingLabel;
           }
           try {
-            var response = await fetch(path, { method: "POST" });
-            var payload = await response.json();
+            var payload = await requestJson(path, "POST", 90000);
             showToast(payload.message || (payload.ok ? "操作完成" : "操作失败"), !payload.ok);
-            await refreshStatus();
             return payload;
           } catch (error) {
             showToast(error && error.message ? error.message : "请求失败，请重试", true);
@@ -688,6 +727,9 @@
               actionButton.disabled = false;
               if (pendingLabel) button.textContent = originalLabel;
             }
+            if (statusRequest) await statusRequest.catch(function () {});
+            actionInProgress = false;
+            await refreshStatus().catch(function () {});
           }
         }
 
@@ -737,7 +779,7 @@
         byId("openDashboardBtn").addEventListener("click", async function () {
           if (primaryAction === "account") {
             var result = await postAction("/api/account-action", byId("primaryActionLabel"), "正在打开…");
-            if (result.ok) openModal("loginModal");
+            if (result.ok && result.session) openModal("loginModal");
             return;
           }
           await postAction("/api/open-dashboard", byId("primaryActionLabel"), "正在打开…");
@@ -748,7 +790,7 @@
             return;
           }
           var result = await postAction("/api/account-action", byId("accountActionLabel"), "正在打开…");
-          if (result.ok) openModal("loginModal");
+          if (result.ok && result.session) openModal("loginModal");
         });
         byId("confirmLogoutButton").addEventListener("click", async function () {
           var result = await postAction("/api/account-action", byId("confirmLogoutButton"), "正在退出…");

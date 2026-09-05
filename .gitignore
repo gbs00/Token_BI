@@ -11,4 +11,5 @@ dist/
 src-tauri/binaries/token-bi-backend-*
 src-tauri/binaries/token-bi-control-*
 src-tauri/target/
+src-tauri/target.noindex/
 src-tauri/gen/

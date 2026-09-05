@@ -19,7 +19,7 @@
 - [README.md](/Users/gbs00/我的文件夹/Projects/Token_BI/README.md)：需求与产品约束
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：技术架构说明
 - [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
-- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target/release/bundle/macos/Token BI.app>)：Mac App 原型入口，双击后打开内嵌控制台
+- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target.noindex/release/bundle/macos/Token BI.app>)：Mac App 原型入口，双击后打开内嵌控制台
 - [docs/RELEASE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/RELEASE.md)：DMG、本地 release、签名、公证和 GitHub updater 发布说明
 - [config/accounts.json](/Users/gbs00/我的文件夹/Projects/Token_BI/config/accounts.json)：账号配置
 - [scripts/open_control_panel.command](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.command>)：Mac 本地控制台入口，双击即可启动控制页
@@ -98,7 +98,7 @@ npm run app:build
 - 虽然当前主链路是 `Chrome + CDP attach`
 - 但项目仍然依赖 `playwright` Python 包来连接浏览器调试端口
 - `npm run app:build` 会生成 `Token BI.app`
-- App 构建产物位于 `src-tauri/target/release/bundle/macos/Token BI.app`
+- App 构建产物位于 `src-tauri/target.noindex/release/bundle/macos/Token BI.app`
 - 本机日常使用建议通过 DMG 安装到 `/Applications`，不要长期依赖项目根目录中的 App 副本
 - 当前产品化基础版已将 Python 后端打包为 sidecar；开发构建仍需要本机具备 Python/Node/Rust，最终用户运行 DMG 不应再理解这些开发依赖
 
@@ -141,7 +141,7 @@ EOF
 日常建议优先双击：
 
 ```text
-src-tauri/target/release/bundle/macos/Token BI.app
+src-tauri/target.noindex/release/bundle/macos/Token BI.app
 ```
 
 App 会自动：
@@ -454,7 +454,7 @@ http://10.124.4.70:8787/dashboard
 优先双击：
 
 ```text
-src-tauri/target/release/bundle/macos/Token BI.app
+src-tauri/target.noindex/release/bundle/macos/Token BI.app
 ```
 
 如果只是临时调试，也可以继续使用控制台脚本。

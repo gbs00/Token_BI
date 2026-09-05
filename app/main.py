@@ -28,7 +28,7 @@ def create_app(
         finally:
             resolved_container.shutdown()
 
-    app = FastAPI(title="Token BI", version="1.1.2", lifespan=lifespan)
+    app = FastAPI(title="Token BI", version="1.1.3", lifespan=lifespan)
     app.state.settings = settings
     app.state.container = resolved_container
 

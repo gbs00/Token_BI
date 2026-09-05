@@ -5,10 +5,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
+APP_DATA_DIR="${TOKEN_BI_APP_DATA_DIR:-$PROJECT_ROOT}"
+export TOKEN_BI_APP_DATA_DIR="$APP_DATA_DIR"
 HOST="${TOKEN_BI_HOST:-0.0.0.0}"
 PORT="${TOKEN_BI_PORT:-8787}"
-PID_FILE="$PROJECT_ROOT/runtime/token_bi.pid"
-LOG_DIR="$PROJECT_ROOT/runtime/logs"
+PID_FILE="$APP_DATA_DIR/runtime/token_bi.pid"
+LOG_DIR="$APP_DATA_DIR/runtime/logs"
 LOG_FILE="$LOG_DIR/server.log"
 LOCAL_HOSTNAME="$(scutil --get LocalHostName 2>/dev/null || true)"
 
@@ -35,7 +37,7 @@ fi
 
 cd "$PROJECT_ROOT"
 
-nohup "$VENV_PYTHON" -m uvicorn app.main:app --app-dir "$PROJECT_ROOT" --host "$HOST" --port "$PORT" >"$LOG_FILE" 2>&1 &
+nohup "$VENV_PYTHON" -m app.cli main-server --host "$HOST" --port "$PORT" >"$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$PID_FILE"
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from app.models.account import AccountStatus, CreateAccountRequest
@@ -24,6 +25,8 @@ class ControlledConnectorManager:
         self.failure: ConnectorFailure | None = None
         self.started: threading.Event | None = None
         self.release: threading.Event | None = None
+        self.identity = "user****@example.com"
+        self.unknown_window = False
 
     def fetch_usage(self, account):
         self.calls += 1
@@ -39,20 +42,20 @@ class ControlledConnectorManager:
             source_type="oauth",
             source_detail="oauth_usage_api",
             payload={
-                "account_masked_email": "user****@example.com",
+                "account_masked_email": self.identity,
                 "updated_at": now,
                 "windows": [
                     {
-                        "display_name": "5h window",
+                        "display_name": "Daily" if self.unknown_window else "5h window",
                         "remaining_pct": 82,
                         "reset_at": now + timedelta(hours=4),
-                        "window_minutes": 300,
+                        "window_minutes": 1440 if self.unknown_window else 300,
                     },
                     {
-                        "display_name": "Weekly",
+                        "display_name": "Daily" if self.unknown_window else "Weekly",
                         "remaining_pct": 97,
                         "reset_at": now + timedelta(days=6),
-                        "window_minutes": 10080,
+                        "window_minutes": 1440 if self.unknown_window else 10080,
                     },
                 ],
             },
@@ -289,3 +292,128 @@ def test_logout_clear_removes_snapshot_and_visible_metrics(container) -> None:
 
     assert not store.snapshot_path.exists()
     assert coordinator.get_dashboard().metrics == []
+
+
+def test_failed_account_switch_never_relabels_old_quota(container) -> None:
+    account = _create_active_account(container)
+    coordinator, manager, store = _build_coordinator(container)
+    coordinator.refresh()
+    manager.identity = "othe****@example.com"
+    manager.unknown_window = True
+
+    failed = coordinator.refresh()
+
+    assert failed.state == PageState.SOURCE_CHANGED
+    assert failed.metrics == []
+    assert "已保留" not in failed.message
+    assert failed.summary.last_success_at is None
+    assert not store.snapshot_path.exists()
+    assert container.account_service.get_account(account.account_id).masked_email == account.masked_email
+
+
+def test_memory_snapshot_is_not_reused_after_identity_change(container) -> None:
+    account = _create_active_account(container)
+    coordinator, _, _ = _build_coordinator(container)
+    coordinator.refresh()
+    container.account_service.update_account_identity(account.account_id, "othe****@example.com")
+
+    assert coordinator.get_dashboard().metrics == []
+
+
+def test_logout_stays_disconnected_after_refresh_and_restart(container) -> None:
+    _create_active_account(container)
+    coordinator, manager, _ = _build_coordinator(container)
+    coordinator.refresh()
+    coordinator.disconnect()
+
+    assert coordinator.refresh().metrics == []
+    assert manager.calls == 1
+    restored, restored_manager, _ = _build_coordinator(container)
+    assert restored.refresh().metrics == []
+    assert restored_manager.calls == 0
+    assert restored.get_dashboard().summary.next_sync_at is None
+    restored.resume()
+    assert restored.refresh().state == PageState.READY
+    assert restored_manager.calls == 1
+
+
+def test_logout_discards_inflight_result_even_after_resuming(container) -> None:
+    account = _create_active_account(container)
+    manager = ControlledConnectorManager()
+    manager.started, manager.release = threading.Event(), threading.Event()
+    coordinator, _, store = _build_coordinator(container, manager)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(coordinator.refresh()))
+    worker.start()
+    assert manager.started.wait(1)
+    coordinator.disconnect()
+    container.account_service.delete_account(account.account_id)
+    coordinator.resume()
+    manager.release.set()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert result[0].metrics == []
+    assert container.account_service.list_accounts() == []
+    assert not store.snapshot_path.exists()
+
+
+def test_full_sync_deadline_releases_callers_and_discards_late_result(container, monkeypatch) -> None:
+    _create_active_account(container)
+    manager = ControlledConnectorManager()
+    manager.started, manager.release = threading.Event(), threading.Event()
+    coordinator, _, store = _build_coordinator(container, manager)
+    monkeypatch.setattr(coordinator, "SYNC_TIMEOUT_SECONDS", 0.08)
+    started = time.monotonic()
+    try:
+        failed = coordinator.refresh()
+        assert time.monotonic() - started < 0.5
+        assert failed.state == PageState.ERROR
+        assert not store.snapshot_path.exists()
+        assert coordinator.refresh().state != PageState.READY
+        assert manager.calls == 1  # 未结束的采集不能不断产生新的线程。
+    finally:
+        manager.release.set()
+    for _ in range(100):
+        if coordinator._fetch_done.wait(0.01):
+            break
+    assert coordinator.get_dashboard().metrics == []
+    assert coordinator.refresh().state == PageState.READY
+
+
+def test_unexpected_sync_error_is_not_reported_as_ready(container) -> None:
+    _create_active_account(container)
+    coordinator, manager, _ = _build_coordinator(container)
+    ready = coordinator.refresh()
+    def fail(_account):
+        raise ValueError("sensitive detail")
+    manager.fetch_usage = fail
+
+    failed = coordinator.refresh()
+
+    assert failed.state == PageState.STALE
+    assert failed.metrics == ready.metrics
+    assert failed.summary.last_success_at == ready.summary.last_success_at
+    assert "sensitive" not in failed.message
+
+
+def test_account_write_failure_is_visible_as_failed_sync(container, monkeypatch):
+    _create_active_account(container)
+    coordinator, _, _ = _build_coordinator(container)
+    coordinator.refresh()
+    def fail(*_args):
+        raise OSError("synthetic write failure")
+    monkeypatch.setattr(container.account_service, "commit_synced_account", fail)
+    assert coordinator.refresh().state == PageState.STALE
+    assert coordinator.get_dashboard().state == PageState.STALE
+
+
+def test_account_fingerprint_invalidates_memory_and_disk_cache(container):
+    from app.models.account import identity_key
+    account = _create_active_account(container)
+    coordinator, _, store = _build_coordinator(container)
+    coordinator.refresh()
+    changed = account.model_copy(update={"identity_key": identity_key("user.two@example.com")})
+    container.account_service._write_accounts([changed])
+    assert coordinator.get_dashboard().metrics == []
+    assert not store.snapshot_path.exists()

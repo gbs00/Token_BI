@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.process_lifecycle import stop_owned_chrome_workers
+
 import subprocess
 import threading
 import time
@@ -198,12 +200,7 @@ class BrowserWorkerService:
             session = self._sessions.pop(account_id, None)
             if session is None:
                 return
-            subprocess.run(
-                ["pkill", "-f", str(session.context_dir)],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            stop_owned_chrome_workers(session.context_dir)
 
     def minimize_session(self, account_id: str) -> bool:
         with self._lock:
@@ -258,7 +255,7 @@ class BrowserWorkerService:
     def _probe_current_url(self, debug_port: int) -> Optional[str]:
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port))
+                browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port), timeout=5000)
                 try:
                     context = browser.contexts[0] if browser.contexts else None
                     if context is None:
@@ -272,7 +269,7 @@ class BrowserWorkerService:
 
     def _scrape_via_cdp(self, debug_port: int) -> tuple[dict, Optional[str]]:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port))
+            browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port), timeout=5000)
             try:
                 context = browser.contexts[0] if browser.contexts else None
                 if context is None:
@@ -286,7 +283,7 @@ class BrowserWorkerService:
     def _minimize_debug_port(self, debug_port: int) -> bool:
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port))
+                browser = playwright.chromium.connect_over_cdp(self._debug_origin(debug_port), timeout=5000)
                 try:
                     context = browser.contexts[0] if browser.contexts else None
                     if context is None:

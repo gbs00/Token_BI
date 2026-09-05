@@ -3,7 +3,8 @@ from __future__ import annotations
 import socket
 import subprocess
 import sys
-from types import SimpleNamespace
+import threading
+import httpx
 
 from scripts import control_panel
 
@@ -140,20 +141,53 @@ def test_packaged_control_uses_sibling_backend_binary(monkeypatch, tmp_path) -> 
 def test_dashboard_urls_cache_system_network_probe(monkeypatch) -> None:
     calls = []
 
-    def fake_run(command, **_kwargs):
+    def fake_command_stdout(command):
         calls.append(command)
-        return SimpleNamespace(stdout="192.168.1.8\n")
+        if command == ["route", "-n", "get", "default"]:
+            return "interface: en5"
+        if command == ["ipconfig", "getifaddr", "en5"]:
+            return "192.168.1.8"
+        return ""
 
     monkeypatch.setattr(control_panel, "_dashboard_url_cache", None)
     monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
-    monkeypatch.setattr(control_panel.subprocess, "run", fake_run)
+    monkeypatch.setattr(control_panel, "_command_stdout", fake_command_stdout)
 
     first = control_panel._dashboard_urls()
     second = control_panel._dashboard_urls()
 
     assert first == second
     assert first["lan"] == "http://192.168.1.8:8787/dashboard"
-    assert calls == [["ipconfig", "getifaddr", "en0"]]
+    assert calls == [
+        ["route", "-n", "get", "default"],
+        ["ipconfig", "getifaddr", "en5"],
+    ]
+
+
+def test_dashboard_urls_falls_back_when_default_interface_has_no_ipv4(monkeypatch) -> None:
+    responses = {
+        ("route", "-n", "get", "default"): "interface: utun4",
+        ("ipconfig", "getifaddr", "utun4"): "",
+        ("ipconfig", "getifaddr", "en0"): "192.168.130.215",
+    }
+
+    monkeypatch.setattr(control_panel, "_dashboard_url_cache", None)
+    monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
+    monkeypatch.setattr(
+        control_panel,
+        "_command_stdout",
+        lambda command: responses.get(tuple(command), ""),
+    )
+
+    urls = control_panel._dashboard_urls()
+
+    assert urls["lan"] == "http://192.168.130.215:8787/dashboard"
+
+
+def test_invalid_interface_addresses_are_not_published(monkeypatch) -> None:
+    monkeypatch.setattr(control_panel, "_command_stdout", lambda _command: "127.0.0.1")
+
+    assert control_panel._interface_ipv4("en0") == ""
 
 
 def test_account_action_button_label_is_state_driven() -> None:
@@ -368,3 +402,48 @@ def test_control_panel_does_not_fake_oauth_or_sync_time() -> None:
     assert "lastRefreshValue.textContent = now.toLocaleTimeString" not in control_panel.HTML
     assert "sourceLabel(usage.source_type)" in control_panel.HTML
     assert "formatSyncTime(usage && usage.updated_at)" in control_panel.HTML
+
+
+def test_status_reports_unhealthy_when_process_exists_but_api_fails(monkeypatch):
+    def unavailable():
+        raise RuntimeError("not responding")
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "12345"))
+    monkeypatch.setattr(control_panel, "_main_runtime_status", unavailable)
+    monkeypatch.setattr(control_panel, "_preferred_account", lambda: None)
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
+    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
+    monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
+    def no_second_probe():
+        raise AssertionError("已确认主服务失联，不应继续串行等待诊断接口")
+    monkeypatch.setattr(control_panel, "_diagnostics_items", no_second_probe)
+
+    payload = control_panel._status_payload()
+
+    assert payload["running"] is True
+    assert payload["healthy"] is False
+    assert "未响应" in payload["health_error"]
+
+
+def test_console_rejects_cross_site_control_actions(monkeypatch):
+    calls = []
+    monkeypatch.setattr(control_panel, "_account_action_flow", lambda: calls.append("account") or {"ok": True})
+    server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/account-action"
+        with httpx.Client(trust_env=False) as client:
+            assert client.post(url, headers={"Origin": "https://untrusted.example"}).status_code == 403
+            assert client.post(url, headers={"Host": "untrusted.example"}).status_code == 403
+            assert calls == []
+            assert client.post(url).status_code == 200
+            assert calls == ["account"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(1)
+
+
+def test_status_account_does_not_resurrect_local_identity_when_disconnected(monkeypatch):
+    monkeypatch.setattr(control_panel, "_preferred_account", lambda: {"account_id": "old"})
+    assert control_panel._status_account(True, {"account": None, "access_enabled": False}) is None

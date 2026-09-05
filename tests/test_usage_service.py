@@ -136,6 +136,18 @@ def test_sync_uses_actual_connector_metadata(container) -> None:
     assert payload.summary.connector_name == "local_codex"
 
 
+def test_sync_preserves_alias_when_account_identity_is_unchanged(container) -> None:
+    account = container.account_service.create_account(
+        CreateAccountRequest(account_alias="工作账号", masked_email="user****@example.com")
+    )
+    service, _ = _make_service(container)
+
+    payload = service.sync_dashboard(account.account_id)
+
+    assert payload.account.account_alias == "工作账号"
+    assert container.account_service.get_account(account.account_id).account_alias == "工作账号"
+
+
 def test_sync_supports_weekly_only_quota(container) -> None:
     account = _make_account(container)
     service, _ = _make_service(container, mode="weekly_only")
@@ -152,6 +164,14 @@ def test_sync_rejects_unknown_official_windows(container) -> None:
 
     with pytest.raises(AnalyticsPageChangedError):
         service.sync_dashboard(account.account_id)
+    assert container.account_service.get_account(account.account_id) == account
+
+
+def test_invalid_first_sync_does_not_create_an_active_account(container) -> None:
+    service, _ = _make_service(container, mode="unknown_window")
+    with pytest.raises(AnalyticsPageChangedError):
+        service.sync_dashboard()
+    assert container.account_service.list_accounts() == []
 
 
 def test_sync_normalizes_known_official_windows(container) -> None:

@@ -31,6 +31,13 @@ pub fn run() {
     let run_cleanup = cleanup_done.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .setup(move |app| {
             let window = create_control_window(app)?;
@@ -245,14 +252,13 @@ fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool
 }
 
 fn stop_started_services(sidecar_child: &SharedChild) {
-    let shutdown_completed = post_control_shutdown();
+    let owned_child = sidecar_child.lock().ok().and_then(|mut guard| guard.take());
+    let Some(child) = owned_child else {
+        return;
+    };
 
-    if let Ok(mut guard) = sidecar_child.lock() {
-        if let Some(child) = guard.take() {
-            if !shutdown_completed {
-                let _ = child.kill();
-            }
-        }
+    if !post_control_shutdown() {
+        let _ = child.kill();
     }
 }
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -17,6 +17,27 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from app.app_paths import resolve_app_data_dir, resolve_project_root
+from app.process_lifecycle import stop_owned_process, stop_owned_chrome_workers, owns_dev_service
+from app.http_access import allows_local_management
+import psutil
+
+
+def _command_stdout(command: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return result.stdout.strip()
+
+
+def _system_local_hostname() -> str:
+    hostname = _command_stdout(["scutil", "--get", "LocalHostName"])
+    return hostname or socket.gethostname().split(".")[0]
 
 
 PROJECT_ROOT = resolve_project_root()
@@ -31,10 +52,10 @@ CONTROL_HOST = os.getenv("TOKEN_BI_CONTROL_HOST", "127.0.0.1")
 CONTROL_PORT = int(os.getenv("TOKEN_BI_CONTROL_PORT", "8790"))
 MAIN_SERVICE_MARKER = "token-bi-main-service"
 MAIN_SERVER_START_TIMEOUT_SECONDS = 30
-DASHBOARD_URL_CACHE_TTL_SECONDS = 30
+DASHBOARD_URL_CACHE_TTL_SECONDS = 5
 PID_FILE = RUNTIME_DIR / "token_bi.pid"
 RUNTIME_STATE_FILE = RUNTIME_DIR / "token_bi_runtime.json"
-LOCAL_HOSTNAME = socket.gethostname().split(".")[0]
+LOCAL_HOSTNAME = _system_local_hostname()
 _dashboard_url_cache: tuple[float, int, dict[str, str]] | None = None
 
 ACCOUNTS_FILE = APP_DATA_DIR / "config" / "accounts.json"
@@ -47,7 +68,7 @@ def _read_accounts() -> list[dict]:
         payload = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    return payload.get("accounts", [])
+    return payload.get("accounts", []) if payload.get("access_enabled", True) else []
 
 
 def _preferred_account() -> dict | None:
@@ -80,6 +101,8 @@ def _main_runtime_status() -> dict:
 
 
 def _status_account(running: bool, runtime_status: dict | None = None) -> dict | None:
+    if runtime_status is not None and "account" in runtime_status:
+        return runtime_status["account"]
     if running:
         runtime_account = (runtime_status or {}).get("account")
         if runtime_account:
@@ -109,10 +132,12 @@ def _write_runtime_state(port: int, pid: int | str | None) -> None:
         json.dumps({"port": port, "pid": str(pid or "")}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    _invalidate_dashboard_url_cache()
 
 
 def _clear_runtime_state() -> None:
     RUNTIME_STATE_FILE.unlink(missing_ok=True)
+    _invalidate_dashboard_url_cache()
 
 
 def _current_main_port() -> int:
@@ -215,21 +240,18 @@ def _pid_alive(pid: str) -> bool:
 
 def _pid_is_token_bi_main(pid: str) -> bool | None:
     try:
-        result = subprocess.run(
-            ["ps", "-p", str(int(pid)), "-o", "command="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except (OSError, ValueError):
-        return None
-    if result.returncode != 0:
+        process = psutil.Process(int(pid))
+        args = process.cmdline()
+        if process.uids().real != os.getuid():
+            return False
+        if getattr(sys, "frozen", False):
+            return (len(args) > 1 and args[1] == "main-server"
+                    and Path(process.exe()).resolve() == Path(_backend_command([])[0]).resolve())
+        return owns_dev_service(process, PROJECT_ROOT, "main")
+    except psutil.NoSuchProcess:
         return False
-    command = result.stdout.strip()
-    return (
-        "token-bi-backend main-server" in command
-        or "-m app.cli main-server" in command
-    )
+    except (psutil.Error, OSError, ValueError):
+        return None
 
 
 def _backend_command(args: list[str]) -> list[str]:
@@ -254,22 +276,48 @@ def _stop_pid(pid: str) -> bool:
     if _pid_is_token_bi_main(pid) is not True:
         return False
 
-    try:
-        os.kill(pid_int, signal.SIGTERM)
-    except OSError:
-        return False
+    return stop_owned_process(pid_int, lambda process: _pid_is_token_bi_main(str(process.pid)) is True)
 
-    for _ in range(20):
-        if not _pid_alive(pid):
-            return True
-        time.sleep(0.5)
 
+def _default_route_interface() -> str:
+    route_output = _command_stdout(["route", "-n", "get", "default"])
+    for line in route_output.splitlines():
+        key, separator, value = line.strip().partition(":")
+        if separator and key == "interface":
+            return value.strip()
+    return ""
+
+
+def _interface_ipv4(interface: str) -> str:
+    if not interface:
+        return ""
+    candidate = _command_stdout(["ipconfig", "getifaddr", interface])
     try:
-        os.kill(pid_int, signal.SIGKILL)
-    except OSError:
-        return False
-    time.sleep(0.5)
-    return not _pid_alive(pid)
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return ""
+    if (
+        address.version != 4
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+    ):
+        return ""
+    return str(address)
+
+
+def _current_lan_ipv4() -> str:
+    interfaces = [_default_route_interface(), "en0", "en1"]
+    for interface in dict.fromkeys(item for item in interfaces if item):
+        if address := _interface_ipv4(interface):
+            return address
+    return ""
+
+
+def _invalidate_dashboard_url_cache() -> None:
+    global _dashboard_url_cache
+    _dashboard_url_cache = None
 
 
 def _dashboard_urls() -> dict[str, str]:
@@ -286,23 +334,7 @@ def _dashboard_urls() -> dict[str, str]:
         "local": f"http://127.0.0.1:{port}/dashboard",
         "fixed": f"http://{LOCAL_HOSTNAME}.local:{port}/dashboard" if LOCAL_HOSTNAME else "",
     }
-    try:
-        wifi_ip = subprocess.run(
-            ["ipconfig", "getifaddr", "en0"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        if not wifi_ip:
-            wifi_ip = subprocess.run(
-                ["ipconfig", "getifaddr", "en1"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout.strip()
-    except OSError:
-        wifi_ip = ""
-
+    wifi_ip = _current_lan_ipv4()
     base["lan"] = f"http://{wifi_ip}:{port}/dashboard" if wifi_ip else ""
     _dashboard_url_cache = (now, port, dict(base))
     return base
@@ -456,17 +488,17 @@ def _login_account_flow() -> dict:
         return {"ok": False, "message": message}
 
     try:
-        payload = _main_api_request("POST", "/api/v1/account-session/login", payload={})
+        payload = _main_api_request("POST", "/api/v1/account-session/login", payload={}, timeout=80)
     except RuntimeError as exc:
         return _error_payload("login_required", details=str(exc))
 
     return {
-        "ok": True,
+        "ok": payload.get("ok", True),
         "message": payload.get("message")
         or "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。",
         "account": payload.get("account"),
         "session": payload.get("session"),
-        "action": "login",
+        "action": payload.get("action", "login"),
     }
 
 
@@ -515,7 +547,7 @@ def _refresh_live_accounts() -> dict:
                 "POST",
                 "/api/v1/dashboard/refresh",
                 payload={},
-                timeout=45,
+                timeout=50,
             )
             results = [
                 {
@@ -550,7 +582,7 @@ def _refresh_live_accounts() -> dict:
             }
 
         payload = _error_payload("login_required")
-        payload["message"] = "状态已刷新，但还没有可用 usage。请确认本机 Codex 或 CLI 已完成登录。"
+        payload["message"] = next((item["message"] for item in results if item.get("message")), "本次同步未成功，将自动重试。")
         payload["results"] = results
         return payload
 
@@ -564,7 +596,7 @@ def _refresh_live_accounts() -> dict:
                 "POST",
                 f"/api/v1/dashboard/refresh?account_id={account_id}",
                 payload={},
-                timeout=45,
+                timeout=50,
             )
             results.append(
                 {
@@ -598,7 +630,7 @@ def _refresh_live_accounts() -> dict:
             "results": results,
         }
     payload = _error_payload("login_required")
-    payload["message"] = "状态已刷新，但还没有可用 usage。请确认登录窗口未关闭且已完成登录。"
+    payload["message"] = next((item["message"] for item in results if item.get("message")), "本次同步未成功，将自动重试。")
     payload["results"] = results
     return payload
 
@@ -667,13 +699,7 @@ def _clear_log() -> tuple[bool, str]:
 
 
 def _close_token_bi_chrome_workers() -> None:
-    subprocess.run(
-        ["pkill", "-f", str(RUNTIME_DIR / "contexts")],
-        cwd=str(PROJECT_ROOT),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    stop_owned_chrome_workers(RUNTIME_DIR / "contexts")
 
 
 @lru_cache(maxsize=1)
@@ -780,18 +806,24 @@ def _guide_payload(
 def _status_payload() -> dict:
     running, pid = _main_server_running()
     runtime_status = {}
+    health_error = None
     if running:
         try:
             runtime_status = _main_runtime_status()
         except RuntimeError:
-            runtime_status = {}
+            health_error = "主服务进程存在，但状态接口未响应；请关闭并重新开启服务。"
+            runtime_status = {"account": _preferred_account()}
+    healthy = running and runtime_status.get("service") == MAIN_SERVICE_MARKER
     account = _status_account(running, runtime_status)
     urls = _dashboard_urls()
     chrome_available = _chrome_available()
     account_action_label = _account_action_label(account)
-    diagnostics = _diagnostics_items()
+    diagnostics = _diagnostics_items() if healthy else []
     return {
         "running": running,
+        "healthy": healthy,
+        "health_error": health_error,
+        "access_enabled": runtime_status.get("access_enabled", True),
         "pid": pid,
         "port": _current_main_port(),
         "control_port": CONTROL_PORT,
@@ -842,7 +874,19 @@ HTML = CONTROL_PANEL_HTML_PATH.read_text(encoding="utf-8")
 
 
 class ControlPanelHandler(BaseHTTPRequestHandler):
+    def _allow_request(self) -> bool:
+        try:
+            host = urlparse("http://" + self.headers.get("Host", "")).hostname or ""
+        except ValueError:
+            host = ""
+        if allows_local_management(self.client_address[0], host, self.headers.get("Origin")):
+            return True
+        self.send_error(HTTPStatus.FORBIDDEN, "Local console requests only")
+        return False
+
     def do_GET(self) -> None:
+        if not self._allow_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._send_html(HTML)
@@ -868,6 +912,8 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
+        if not self._allow_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/service-action":
             self._send_json(_service_action_flow())
@@ -903,6 +949,7 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             self._send_json(_login_account_flow())
             return
         if parsed.path == "/api/refresh-status":
+            _invalidate_dashboard_url_cache()
             self._send_json(_refresh_live_accounts())
             return
         if parsed.path == "/api/clear-log":

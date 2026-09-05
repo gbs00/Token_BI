@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.models.account import identity_key
+
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -80,8 +82,11 @@ class ScraperService:
     def _collect_page_artifacts(self, page) -> dict:
         network_json_texts: list[str] = []
 
-        def capture_response(response) -> None:
+        def capture_response(request) -> None:
             try:
+                response = request.response()
+                if response is None:
+                    return
                 content_type = response.headers.get("content-type", "").lower()
                 url = response.url.lower()
                 if "json" not in content_type:
@@ -94,7 +99,7 @@ class ScraperService:
             except PlaywrightError:
                 return
 
-        page.on("response", capture_response)
+        page.on("requestfinished", capture_response)
         try:
             self._navigate_to_fresh_analytics_page(page)
             artifacts = page.evaluate(
@@ -111,18 +116,7 @@ class ScraperService:
             artifacts["directUsageJsonTexts"] = []
             artifacts["directIdentityJsonTexts"] = []
             try:
-                direct_payload = page.evaluate(
-                    """async () => {
-                        const response = await fetch('/backend-api/wham/usage', {
-                          credentials: 'include',
-                          headers: { accept: 'application/json' }
-                        });
-                        if (!response.ok) {
-                          return null;
-                        }
-                        return await response.text();
-                    }"""
-                )
+                direct_payload = self._fetch_page_text(page, "/backend-api/wham/usage")
                 if direct_payload:
                     artifacts["directUsageJsonTexts"].append(direct_payload)
             except PlaywrightError:
@@ -132,19 +126,7 @@ class ScraperService:
                 "/backend-api/accounts/check/v4-2023-04-27",
             ):
                 try:
-                    identity_payload = page.evaluate(
-                        """async (url) => {
-                            const response = await fetch(url, {
-                              credentials: 'include',
-                              headers: { accept: 'application/json' }
-                            });
-                            if (!response.ok) {
-                              return null;
-                            }
-                            return await response.text();
-                        }""",
-                        identity_url,
-                    )
+                    identity_payload = self._fetch_page_text(page, identity_url)
                     if identity_payload:
                         artifacts["directIdentityJsonTexts"].append(identity_payload)
                 except PlaywrightError:
@@ -152,9 +134,30 @@ class ScraperService:
             return artifacts
         finally:
             try:
-                page.remove_listener("response", capture_response)
+                page.remove_listener("requestfinished", capture_response)
             except Exception:
                 pass
+
+    def _fetch_page_text(self, page, url: str) -> Optional[str]:
+        return page.evaluate(
+            """async (options) => {
+                const controller = new AbortController();
+                let timer;
+                try {
+                    return await Promise.race([
+                        fetch(options.url, {
+                            credentials: 'include', headers: { accept: 'application/json' },
+                            signal: controller.signal
+                        }).then(response => response.ok ? response.text() : null),
+                        new Promise(resolve => { timer = setTimeout(() => resolve(null), options.timeout); })
+                    ]);
+                } finally {
+                    clearTimeout(timer);
+                    controller.abort();
+                }
+            }""",
+            {"url": url, "timeout": min(5000, self._settings.scrape_timeout_ms)},
+        )
 
     def _navigate_to_fresh_analytics_page(self, page) -> None:
         page.goto(
@@ -183,6 +186,15 @@ class ScraperService:
         body_text = self._normalize_text(artifacts.get("bodyText", ""))
         title = self._normalize_text(artifacts.get("title", ""))
         account_identity = self._extract_account_identity(artifacts, body_text)
+        email = self._extract_email_identity_from_json_texts([
+            *artifacts.get("directIdentityJsonTexts", []),
+            *artifacts.get("networkJsonTexts", []),
+            *artifacts.get("scriptJsonTexts", []),
+        ], masked=False)
+        if not email:
+            match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", body_text)
+            email = match.group(0) if match else None
+        key = identity_key(email) if email else None
 
         if self._looks_like_login_gate(title=title, body_text=body_text):
             raise SessionExpiredError("Session expired on Mac. Please sign in again on Mac.")
@@ -190,28 +202,30 @@ class ScraperService:
         direct_data = self._extract_usage_from_json_texts(artifacts.get("directUsageJsonTexts", []))
         if direct_data is not None:
             direct_data["source_detail"] = "direct_usage_fetch"
-            return self._with_account_identity(direct_data, account_identity)
+            return self._with_account_identity(direct_data, account_identity, key)
 
         network_data = self._extract_usage_from_json_texts(artifacts.get("networkJsonTexts", []))
         if network_data is not None:
             network_data["source_detail"] = "network_response"
-            return self._with_account_identity(network_data, account_identity)
+            return self._with_account_identity(network_data, account_identity, key)
 
         script_data = self._extract_usage_from_json_texts(artifacts.get("scriptJsonTexts", []))
         if script_data is not None:
             script_data["source_detail"] = "script_json"
-            return self._with_account_identity(script_data, account_identity)
+            return self._with_account_identity(script_data, account_identity, key)
 
         text_data = self._extract_usage_from_text(body_text)
         if text_data is not None:
             text_data["source_detail"] = "dom_fallback"
-            return self._with_account_identity(text_data, account_identity)
+            return self._with_account_identity(text_data, account_identity, key)
 
         raise AnalyticsPageChangedError("Analytics page may have changed.")
 
-    def _with_account_identity(self, payload: dict, account_identity: Optional[str]) -> dict:
+    def _with_account_identity(self, payload: dict, account_identity: Optional[str], key: Optional[str] = None) -> dict:
         if account_identity:
             payload["account_masked_email"] = account_identity
+        if key:
+            payload["account_identity_key"] = key
         return payload
 
     def _extract_account_identity(self, artifacts: dict, body_text: str) -> Optional[str]:
@@ -252,6 +266,7 @@ class ScraperService:
     def _extract_email_identity_from_json_texts(
         self,
         json_texts: Iterable[str],
+        masked: bool = True,
     ) -> Optional[str]:
         for text in json_texts:
             stripped = text.strip()
@@ -261,7 +276,7 @@ class ScraperService:
                 payload = json.loads(stripped)
             except json.JSONDecodeError:
                 continue
-            identity = self._find_email_identity(payload)
+            identity = self._find_email_identity(payload, masked=masked)
             if identity:
                 return identity
         return None
@@ -269,7 +284,7 @@ class ScraperService:
     def _find_identity(self, payload: Any) -> Optional[str]:
         return self._find_email_identity(payload) or self._find_label_identity(payload)
 
-    def _find_email_identity(self, payload: Any) -> Optional[str]:
+    def _find_email_identity(self, payload: Any, masked: bool = True) -> Optional[str]:
         if isinstance(payload, dict):
             for key, value in payload.items():
                 key_lower = str(key).lower()
@@ -278,13 +293,13 @@ class ScraperService:
                     and (key_lower == "email" or key_lower.endswith("_email"))
                     and "@" in value
                 ):
-                    return self._mask_email(value)
-                nested = self._find_email_identity(value)
+                    return self._mask_email(value) if masked else value.strip()
+                nested = self._find_email_identity(value, masked=masked)
                 if nested:
                     return nested
         elif isinstance(payload, list):
             for item in payload:
-                nested = self._find_email_identity(item)
+                nested = self._find_email_identity(item, masked=masked)
                 if nested:
                     return nested
         return None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.models.account import AccountRecord, AccountStatus, CreateAccountRequest
+from app.models.account import AccountRecord, AccountStatus, same_account_identity
 from app.models.usage_snapshot import (
     DashboardPayload,
     DashboardSummary,
@@ -25,6 +25,10 @@ DASHBOARD_METRIC_LABELS = {
 }
 
 
+class AccountIdentityChangedError(AnalyticsPageChangedError):
+    """已确认账号变化，但新账号的额度尚不能用于展示。"""
+
+
 class UsageService:
     def __init__(
         self,
@@ -37,6 +41,12 @@ class UsageService:
         self._connector_manager = connector_manager
 
     def sync_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
+        enabled, revision = self.access_state()
+        if not enabled:
+            return self.empty_dashboard()
+        return self.commit_dashboard(self.prepare_dashboard(account_id), revision)
+
+    def prepare_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
         account = self._resolve_account(account_id)
         if account is None:
             account = self._bootstrap_account()
@@ -44,48 +54,44 @@ class UsageService:
         connector_result = self._connector_manager.fetch_usage(account)
 
         identity = str(connector_result.payload.get("account_masked_email") or "").strip()
-        if identity and identity != account.masked_email:
-            updated_identity = self._account_service.update_account_identity(
-                account.account_id,
-                masked_email=identity,
+        if not identity and connector_result.connector_name in {"codex_oauth", "codex_cli_rpc", "browser_worker"}:
+            identity = "Codex 账号"
+        proposed = account.model_copy(update={
+            "account_alias": identity if identity and identity != account.masked_email else account.account_alias,
+            "masked_email": identity or account.masked_email,
+            "identity_key": connector_result.payload.get("account_identity_key"),
+        })
+        try:
+            payload = self._build_ready_payload(
+                account=proposed,
+                raw_payload=connector_result.payload,
+                connector_name=connector_result.connector_name,
+                source_type=connector_result.source_type,
+                source_detail=connector_result.source_detail,
             )
-            if updated_identity is not None:
-                account = updated_identity
-
-        payload = self._build_ready_payload(
-            account=account,
-            raw_payload=connector_result.payload,
-            connector_name=connector_result.connector_name,
-            source_type=connector_result.source_type,
-            source_detail=connector_result.source_detail,
-        )
-        if account.account_id == "acc_local_codex":
-            account = self._account_service.create_account(
-                CreateAccountRequest(
-                    account_alias=identity or "Codex local account",
-                    masked_email=identity or "Codex local account",
-                )
-            )
-            payload = payload.model_copy(update={"account": account})
-
-        if account.status != AccountStatus.ACTIVE:
-            updated_account = self._account_service.update_account_status(
-                account.account_id,
-                status=AccountStatus.ACTIVE.value,
-                update_validation_time=True,
-            )
-            if updated_account is not None:
-                account = updated_account
-                payload = payload.model_copy(update={"account": updated_account})
-        if not payload.metrics:
-            raise AnalyticsPageChangedError("官方返回的额度窗口暂不支持展示。")
+            if not payload.metrics:
+                raise AnalyticsPageChangedError("官方返回的额度窗口暂不支持展示。")
+        except (AnalyticsPageChangedError, ValueError, TypeError) as exc:
+            if not same_account_identity(account, proposed):
+                raise AccountIdentityChangedError("账号已变化，等待新账号的有效额度。") from exc
+            raise
         return payload
+
+    def commit_dashboard(self, payload: DashboardPayload, revision: int) -> DashboardPayload:
+        account = self._account_service.commit_synced_account(payload.account, revision)
+        return payload.model_copy(update={"account": account}) if account else self.empty_dashboard()
+
+    def access_state(self) -> tuple[bool, int]:
+        return self._account_service.access_state()
+
+    def set_access_enabled(self, enabled: bool) -> None:
+        self._account_service.set_access_enabled(enabled)
 
     def _resolve_account(self, account_id: Optional[str]) -> Optional[AccountRecord]:
         return self._account_service.preferred_account(account_id)
 
     def current_account(self, account_id: Optional[str] = None) -> Optional[AccountRecord]:
-        return self._resolve_account(account_id)
+        return self._resolve_account(account_id) if self.access_state()[0] else None
 
     def mark_account_expired(self, account_id: str) -> Optional[AccountRecord]:
         return self._account_service.update_account_status(
@@ -94,6 +100,12 @@ class UsageService:
         )
 
     def empty_dashboard(self, message: Optional[str] = None) -> DashboardPayload:
+        if not self.access_state()[0]:
+            return DashboardPayload(
+                state=PageState.EMPTY,
+                message="已断开账号接入，请在 Mac 控制台点击登录账号恢复。",
+                detail_links=self._detail_links(),
+            )
         return DashboardPayload(
             account=self._resolve_account(None),
             state=PageState.EMPTY,
