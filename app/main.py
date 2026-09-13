@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app import __version__
 from app.config import Settings, get_settings
 from app.container import ServiceContainer
 from app.routes.api_routes import router as api_router
@@ -28,7 +29,7 @@ def create_app(
         finally:
             resolved_container.shutdown()
 
-    app = FastAPI(title="Token BI", version="1.1.3", lifespan=lifespan)
+    app = FastAPI(title="Token BI", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.container = resolved_container
 

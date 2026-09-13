@@ -90,9 +90,6 @@ class AccountService:
             accounts = self._read_accounts()
         return self._select_visible_accounts(accounts, preferred_account_id)
 
-    def first_account(self) -> Optional[AccountRecord]:
-        return self.preferred_account()
-
     def preferred_account(self, preferred_account_id: Optional[str] = None) -> Optional[AccountRecord]:
         with self._lock:
             accounts = self._read_accounts()

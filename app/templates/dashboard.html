@@ -19,7 +19,7 @@
           : "theme-dark";
       })();
     </script>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260712-console-dashboard-ui" />
+    <link rel="stylesheet" href="{{ url_for('static', path='css/dashboard.css') }}?v=20260913-fit-viewport" />
   </head>
   <body data-dashboard-account-id="{{ selected_account_id or '' }}">
     {% set source_labels = {
@@ -153,6 +153,6 @@
     </div>
 
     <div class="toast" data-toast role="status" aria-live="polite"></div>
-    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260712-console-dashboard-ui"></script>
+    <script src="{{ url_for('static', path='js/dashboard.js') }}?v=20260913-fit-viewport"></script>
   </body>
 </html>

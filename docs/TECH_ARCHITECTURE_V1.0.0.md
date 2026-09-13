@@ -1,5 +1,7 @@
 # Token BI V1.0.0 技术架构文档
 
+> 2026-09-12 菜单栏入口与生命周期变更见 [菜单栏技术纪要](TECH_MENUBAR.md)。账号、采集及 Web 看板链路沿用本文件，本轮不替换其业务实现。
+
 日期：2026-05-23  
 状态：设计草案  
 输入来源：`Token BI 需求澄清分析` V1.0 PRD 草案、`V0.9.1 优化点整理`
@@ -489,15 +491,18 @@ sequenceDiagram
     participant Web as WebSessionConnector
 
     User->>Control: 打开 Token BI
-    Control->>API: GET diagnostics
-    API->>OAuth: detect local auth
-    API->>CLI: detect codex app-server
+    Control->>API: GET runtime-status（主服务已启动时）
+    API-->>Control: 最近同步与账号状态
+    User->>Control: 点击登录账号
+    Control->>API: POST account-session/login
+    API->>OAuth: 优先检查本机登录态
+    API->>CLI: 必要时尝试 CLI
     alt local auth usable
         API-->>Control: 可直接同步
     else auth missing
         API-->>Control: 引导完成 Codex 登录授权
         User->>Control: 执行授权或 Web Session 登录
-        Control->>Web: fallback login if needed
+        API->>Web: fallback login if needed
     end
 ```
 
@@ -562,7 +567,7 @@ sequenceDiagram
 
 ### 10.3 `GET /api/v1/diagnostics`
 
-返回控制台诊断信息。
+返回控制台诊断信息，供本机排障调用。正常控制台轮询不调用此接口，避免重复读取凭据和检测浏览器；仅使用 `runtime-status` 的实际同步结果。
 
 新增诊断项：
 
@@ -654,7 +659,8 @@ sequenceDiagram
 - 未知窗口名称兜底展示。
 - 数据源标签展示。
 - 错误态和 stale 态展示。
-- iPhone 5s 横屏布局不溢出。
+- 横屏为看板主要场景，覆盖 5S、较宽手机、平板和桌面；单/双额度在正常可用空间内完整展示，竖屏兼容。
+- 按实际可见高度分配空间，覆盖旋转、地址栏变化、安全区域和旧视口接口回退；极小窗口或长错误内容允许滚动，不裁切。实现与测试边界见 [自适应看板纪要](TECH_DASHBOARD_RESPONSIVE.md)。
 
 ### 12.4 本地集成验收
 

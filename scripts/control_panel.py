@@ -8,7 +8,6 @@ import subprocess
 import sys
 import threading
 import time
-from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,12 +78,6 @@ def _preferred_account() -> dict | None:
     if active:
         return active[0]
     return accounts[0]
-
-
-def _local_visible_accounts() -> list[dict]:
-    accounts = [account for account in _read_accounts() if not account.get("account_id", "").startswith("acc_demo_")]
-    active_accounts = [account for account in accounts if account.get("status") == "active"]
-    return active_accounts or accounts
 
 
 def _main_visible_accounts() -> list[dict]:
@@ -207,6 +200,9 @@ def _pid_alive(pid: str) -> bool:
     except ValueError:
         return False
 
+    if pid_int <= 0:
+        return False
+
     try:
         waited_pid, _ = os.waitpid(pid_int, os.WNOHANG)
         if waited_pid == pid_int:
@@ -218,24 +214,12 @@ def _pid_alive(pid: str) -> bool:
         return False
 
     try:
-        os.kill(pid_int, 0)
-    except OSError:
-        return False
-
-    try:
-        result = subprocess.run(
-            ["ps", "-p", str(pid_int), "-o", "state="],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
+        return psutil.Process(pid_int).status() not in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
+    except psutil.AccessDenied:
+        # 存在但状态不可读，后续所有权检查仍负责限制停止操作。
         return True
-    if result.returncode != 0:
+    except (psutil.Error, OSError):
         return False
-    if result.stdout.strip().upper().startswith("Z"):
-        return False
-    return True
 
 
 def _pid_is_token_bi_main(pid: str) -> bool | None:
@@ -361,7 +345,16 @@ def _qrcode_svg(url: str) -> str:
     return raw
 
 
+_main_start_lock = threading.Lock()
+
+
 def _start_main_server_process() -> tuple[bool, str]:
+    # App 自动启动和登录重试可以同时到达，只允许创建一个主服务。
+    with _main_start_lock:
+        return _start_main_server_locked()
+
+
+def _start_main_server_locked() -> tuple[bool, str]:
     running, pid = _main_server_running()
     if running:
         return True, f"Token BI is already running · PID {pid or '--'} · Port {_current_main_port()}"
@@ -414,6 +407,12 @@ def _start_main_server_process() -> tuple[bool, str]:
 
 
 def _stop_main_server_process() -> tuple[bool, str]:
+    # 等待在途启动写入 PID，避免刚打开便退出时留下无人管理的主服务。
+    with _main_start_lock:
+        return _stop_main_server_locked()
+
+
+def _stop_main_server_locked() -> tuple[bool, str]:
     stopped = False
     messages = []
     if PID_FILE.exists():
@@ -478,12 +477,8 @@ def _wait_for_main_server(
     return False
 
 
-def _ensure_main_server() -> tuple[bool, str]:
-    return _start_main_server_process()
-
-
 def _login_account_flow() -> dict:
-    ok, message = _ensure_main_server()
+    ok, message = _start_main_server_process()
     if not ok:
         return {"ok": False, "message": message}
 
@@ -503,7 +498,7 @@ def _login_account_flow() -> dict:
 
 
 def _logout_account_flow() -> dict:
-    ok, message = _ensure_main_server()
+    ok, message = _start_main_server_process()
     if not ok:
         return _error_payload("service_stopped", details=message)
 
@@ -537,133 +532,29 @@ def _refresh_live_accounts() -> dict:
     if not running:
         return {"ok": False, "message": "Token BI is not running. Start it first."}
 
+    # The coordinator owns the current account and source priority, not saved records.
     try:
-        accounts = _main_visible_accounts()
-    except RuntimeError:
-        accounts = _local_visible_accounts()
-    if not accounts:
-        try:
-            payload = _main_api_request(
-                "POST",
-                "/api/v1/dashboard/refresh",
-                payload={},
-                timeout=50,
-            )
-            results = [
-                {
-                    "account_id": (payload.get("account") or {}).get("account_id"),
-                    "state": payload.get("state"),
-                    "masked_email": (payload.get("account") or {}).get("masked_email"),
-                    "source_type": (payload.get("summary") or {}).get("source_type"),
-                    "source_detail": (payload.get("summary") or {}).get("source_detail"),
-                    "connector_name": (payload.get("summary") or {}).get("connector_name"),
-                    "message": payload.get("message"),
-                }
-            ]
-        except RuntimeError as exc:
-            results = [{"account_id": None, "state": "error", "message": str(exc)}]
-
-        ready = [item for item in results if item.get("state") == "ready"]
-        if ready:
-            labels = ", ".join(dict.fromkeys(item.get("masked_email") or "Codex 本机账号" for item in ready))
-            sources = ", ".join(
-                dict.fromkeys(
-                    (
-                        f"{item.get('source_type') or 'unknown'}"
-                        f"/{item.get('connector_name') or item.get('source_detail') or 'unknown'}"
-                    )
-                    for item in ready
-                )
-            )
-            return {
-                "ok": True,
-                "message": f"状态已刷新，已获取 usage：{labels}。数据源：{sources}",
-                "results": results,
-            }
-
-        payload = _error_payload("login_required")
-        payload["message"] = next((item["message"] for item in results if item.get("message")), "本次同步未成功，将自动重试。")
-        payload["results"] = results
-        return payload
-
-    results = []
-    for account in accounts:
-        account_id = account.get("account_id")
-        if not account_id:
-            continue
-        try:
-            payload = _main_api_request(
-                "POST",
-                f"/api/v1/dashboard/refresh?account_id={account_id}",
-                payload={},
-                timeout=50,
-            )
-            results.append(
-                {
-                    "account_id": account_id,
-                    "state": payload.get("state"),
-                    "masked_email": (payload.get("account") or {}).get("masked_email"),
-                    "source_type": (payload.get("summary") or {}).get("source_type"),
-                    "source_detail": (payload.get("summary") or {}).get("source_detail"),
-                    "connector_name": (payload.get("summary") or {}).get("connector_name"),
-                    "message": payload.get("message"),
-                }
-            )
-        except RuntimeError as exc:
-            results.append({"account_id": account_id, "state": "error", "message": str(exc)})
-
-    ready = [item for item in results if item.get("state") == "ready"]
-    if ready:
-        labels = ", ".join(dict.fromkeys(item.get("masked_email") or item["account_id"] for item in ready))
-        sources = ", ".join(
-            dict.fromkeys(
-                (
-                    f"{item.get('source_type') or 'unknown'}"
-                    f"/{item.get('connector_name') or item.get('source_detail') or 'unknown'}"
-                )
-                for item in ready
-            )
-        )
-        return {
-            "ok": True,
-            "message": f"状态已刷新，已获取 usage：{labels}。数据源：{sources}",
-            "results": results,
-        }
-    payload = _error_payload("login_required")
-    payload["message"] = next((item["message"] for item in results if item.get("message")), "本次同步未成功，将自动重试。")
-    payload["results"] = results
-    return payload
-
-
-def _diagnostics_items() -> list[dict]:
-    running, _ = _main_server_running()
-    if not running:
-        return []
-    try:
-        payload = _main_api_request("GET", "/api/v1/diagnostics", timeout=5)
-    except RuntimeError:
-        return []
-    return payload.get("items") or []
-
-
-def _data_source_status(diagnostics: list[dict]) -> str:
-    if not diagnostics:
-        return "数据源：服务启动后检查 OAuth / CLI RPC / Web Session"
-    by_code = {item.get("code"): item for item in diagnostics}
-    labels = []
-    for code, label in (
-        ("codex_auth_available", "OAuth"),
-        ("codex_cli_available", "CLI RPC"),
-        ("web_session_available", "Web Session"),
-    ):
-        item = by_code.get(code) or {}
-        severity = item.get("severity")
-        marker = "可用" if severity in {"ok", "info"} else "需检查"
-        labels.append(f"{label}{marker}")
-    last_error = (by_code.get("last_connector_error") or {}).get("next_step")
-    if last_error and last_error != "No connector errors recorded.":
-        return f"数据源：{' / '.join(labels)}；最近降级：{last_error}"
-    return f"数据源：{' / '.join(labels)}；暂无降级记录"
+        payload = _main_api_request("POST", "/api/v1/dashboard/refresh", payload={}, timeout=50)
+    except RuntimeError as exc:
+        return {"ok": False, "message": str(exc), "results": []}
+    account = payload.get("account") or {}
+    summary = payload.get("summary") or {}
+    result = {
+        "account_id": account.get("account_id"),
+        "state": payload.get("state"),
+        "masked_email": account.get("masked_email"),
+        "source_type": summary.get("source_type"),
+        "source_detail": summary.get("source_detail"),
+        "connector_name": summary.get("connector_name"),
+        "message": payload.get("message"),
+    }
+    ready = payload.get("state") == "ready" and bool(payload.get("metrics"))
+    message = (
+        f"状态已刷新，已获取 usage：{account.get('masked_email') or 'Codex 本机账号'}。"
+        f"数据源：{summary.get('source_type') or 'unknown'}"
+        if ready else payload.get("message") or "本次同步未成功，将自动重试。"
+    )
+    return {"ok": ready, "message": message, "results": [result]}
 
 
 def _open_url(url: str) -> tuple[int, str]:
@@ -683,9 +574,16 @@ def _open_url(url: str) -> tuple[int, str]:
 
 def _tail_log(lines: int = 20) -> str:
     log_file = LOG_DIR / "server.log"
-    if not log_file.exists():
+    if lines <= 0:
+        return ""
+    try:
+        # 状态轮询只读末尾 64 KiB，避免常驻日志增长拖慢控制台。
+        with log_file.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - 65536))
+            content = handle.read(65536).decode("utf-8", errors="replace").splitlines()
+    except OSError:
         return "No server log yet."
-    content = log_file.read_text(encoding="utf-8", errors="ignore").splitlines()
     return "\n".join(content[-lines:]) if content else "No server log yet."
 
 
@@ -700,26 +598,6 @@ def _clear_log() -> tuple[bool, str]:
 
 def _close_token_bi_chrome_workers() -> None:
     stop_owned_chrome_workers(RUNTIME_DIR / "contexts")
-
-
-@lru_cache(maxsize=1)
-def _chrome_available() -> bool:
-    candidates = [
-        Path("/Applications/Google Chrome.app"),
-        Path.home() / "Applications" / "Google Chrome.app",
-    ]
-    if any(path.exists() for path in candidates):
-        return True
-    try:
-        result = subprocess.run(
-            ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return bool(result.stdout.strip())
-    except OSError:
-        return False
 
 
 def _account_action_label(account: dict | None) -> str:
@@ -783,26 +661,6 @@ def _error_payload(code: str, details: str | None = None) -> dict:
     }
 
 
-def _guide_payload(
-    running: bool,
-    account: dict | None,
-    urls: dict[str, str],
-    chrome_available: bool,
-) -> dict:
-    account_ready = bool(account and account.get("status") == "active")
-    checklist = [
-        {"label": "检测 Chrome", "done": chrome_available},
-        {"label": "启动本地服务", "done": running},
-        {"label": "登录 Codex 账号", "done": account_ready},
-        {"label": "刷新 usage 数据", "done": account_ready},
-        {"label": "扫码连接副屏", "done": bool(urls.get("fixed") or urls.get("lan")) and running},
-    ]
-    return {
-        "completed": all(item["done"] for item in checklist),
-        "items": checklist,
-    }
-
-
 def _status_payload() -> dict:
     running, pid = _main_server_running()
     runtime_status = {}
@@ -811,14 +669,12 @@ def _status_payload() -> dict:
         try:
             runtime_status = _main_runtime_status()
         except RuntimeError:
-            health_error = "主服务进程存在，但状态接口未响应；请关闭并重新开启服务。"
+            health_error = "主服务进程存在，但状态接口未响应；请退出并重新打开 Token BI。"
             runtime_status = {"account": _preferred_account()}
     healthy = running and runtime_status.get("service") == MAIN_SERVICE_MARKER
     account = _status_account(running, runtime_status)
     urls = _dashboard_urls()
-    chrome_available = _chrome_available()
     account_action_label = _account_action_label(account)
-    diagnostics = _diagnostics_items() if healthy else []
     return {
         "running": running,
         "healthy": healthy,
@@ -830,19 +686,11 @@ def _status_payload() -> dict:
         "hostname": LOCAL_HOSTNAME,
         "packaged": bool(getattr(sys, "frozen", False)),
         "app_data_dir": str(APP_DATA_DIR),
-        "chrome_available": chrome_available,
         "urls": urls,
         "service_action_label": _service_action_label(running),
         "account_action_label": account_action_label,
-        "guide": _guide_payload(
-            running=running,
-            account=account,
-            urls=urls,
-            chrome_available=chrome_available,
-        ),
-        "diagnostics": diagnostics,
-        "data_source_status": _data_source_status(diagnostics),
         "usage": runtime_status.get("usage"),
+        "dashboard": runtime_status.get("dashboard"),
         "account": {
             "masked_email": account.get("masked_email"),
             "status": account.get("status"),
@@ -897,6 +745,17 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/app/health":
             self._send_json(_app_health_payload())
             return
+        if parsed.path == "/api/pairing":
+            kind = parse_qs(parsed.query).get("kind", ["lan"])[0]
+            target = _dashboard_urls().get(kind) if kind in {"lan", "fixed"} else None
+            if not target:
+                self._send_json({"ok": False, "message": "当前入口不可用，请检查 Mac 网络连接。"})
+                return
+            try:
+                self._send_json({"ok": True, "url": target, "svg": _qrcode_svg(target)})
+            except RuntimeError as exc:
+                self._send_json({"ok": False, "message": str(exc)})
+            return
         if parsed.path == "/api/qrcode":
             kind = parse_qs(parsed.query).get("kind", ["fixed"])[0]
             urls = _dashboard_urls()
@@ -947,6 +806,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/add-account":
             self._send_json(_login_account_flow())
+            return
+        if parsed.path == "/api/logout":
+            self._send_json(_logout_account_flow())
             return
         if parsed.path == "/api/refresh-status":
             _invalidate_dashboard_url_cache()

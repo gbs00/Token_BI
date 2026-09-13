@@ -53,14 +53,7 @@ class ServiceContainer:
         )
 
     def startup(self) -> None:
-        accounts = self.account_service.list_visible_accounts() if self.account_service.access_state()[0] else []
-        for account in accounts:
-            if account.status.value != "active":
-                continue
-            try:
-                self.browser_worker_service.restore_session_snapshot(account)
-            except Exception:
-                continue
+        # Web fallback restores its session on demand; never block health on CDP.
         self.usage_sync_coordinator.start()
 
     def shutdown(self) -> None:

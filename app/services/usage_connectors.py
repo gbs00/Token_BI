@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Protocol
 import httpx
 
+from app import __version__
 from app.models.account import AccountRecord, identity_key
 from app.services.browser_worker_service import BrowserWorkerService, LiveSessionRequiredError
 from app.services.scraper_service import (
@@ -362,7 +363,7 @@ class CodexCliRpcConnector:
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "clientInfo": {"name": "token-bi", "version": "1.1.3"},
+                        "clientInfo": {"name": "token-bi", "version": __version__},
                         "capabilities": {"experimentalApi": True},
                     },
                 },

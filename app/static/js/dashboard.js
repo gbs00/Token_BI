@@ -7,6 +7,48 @@
   var syncing = false;
   var activeRequest = null;
   var requestSerial = 0;
+  var layoutFrame = null;
+
+  function scheduleLayout() {
+    if (layoutFrame !== null) return;
+    layoutFrame = window.requestAnimationFrame(function () {
+      layoutFrame = null;
+      var viewport = window.visualViewport;
+      // Preserve user pinch zoom; only browser chrome changes should resize the page.
+      if (!viewport || Math.abs(viewport.scale - 1) < 0.01) {
+        var height = Math.floor(viewport ? viewport.height : window.innerHeight);
+        if (height > 0 && document.documentElement.style.getPropertyValue("--viewport-height") !== height + "px") {
+          document.documentElement.style.setProperty("--viewport-height", height + "px");
+        }
+      }
+      var layouts = Array.prototype.map.call(document.querySelectorAll(".quota-body"), function (body) {
+        return { radial: body.querySelector(".metric-radial"), size: Math.floor(Math.min(body.clientWidth, body.clientHeight, 360)) };
+      });
+      layouts.forEach(function (layout) {
+        if (!layout.radial || layout.size <= 0) return;
+        var size = layout.size + "px";
+        if (layout.radial.style.width !== size) {
+          layout.radial.style.width = size;
+          layout.radial.style.height = size;
+        }
+        layout.radial.setAttribute("data-size", layout.size >= 300 ? "xlarge" : layout.size >= 240 ? "large" : layout.size >= 180 ? "medium" : "small");
+      });
+    });
+  }
+
+  function bindLayout() {
+    window.addEventListener("resize", scheduleLayout);
+    window.addEventListener("orientationchange", scheduleLayout);
+    window.addEventListener("pageshow", scheduleLayout);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleLayout);
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(scheduleLayout);
+      observer.observe(document.querySelector(".topbar"));
+      observer.observe(document.querySelector(".main"));
+    }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleLayout);
+    scheduleLayout();
+  }
 
   function applyStandaloneMode() {
     var isStandalone =
@@ -137,6 +179,7 @@
   }
 
   function setMessageBanner(message) {
+    scheduleLayout();
     var main = document.querySelector(".main");
     var banner = document.querySelector("[data-message-banner]");
     if (!message) {
@@ -304,6 +347,7 @@
       var countdown = document.querySelector("[data-refresh-countdown]");
       if (countdown) countdown.textContent = "--:--";
     }
+    scheduleLayout();
   }
 
   function startCountdown(deadlineMs, prefix) {
@@ -404,6 +448,7 @@
   }, 1000);
 
   applyStandaloneMode();
+  bindLayout();
   bindRefreshButton();
   fetchDashboard();
 })();

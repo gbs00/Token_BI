@@ -1,9 +1,12 @@
 {
   "name": "token-bi",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "private": true,
   "description": "Token BI local sidecar dashboard app shell.",
   "scripts": {
+    "desktop:assets": "node scripts/prepare_desktop.mjs",
+    "desktop:test": "node --test tests/desktop_model.test.mjs",
+    "desktop:preview": "./.venv/bin/python scripts/preview_menubar.py",
     "app:dev": "CARGO_TARGET_DIR=target.noindex tauri dev",
     "app:sidecar": "./scripts/build_sidecar.sh",
     "app:build": "npm run app:sidecar && CARGO_TARGET_DIR=target.noindex tauri build",
@@ -14,6 +17,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.0.0",
+    "lucide-static": "^0.468.0"
   }
 }

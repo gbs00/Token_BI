@@ -1,5 +1,16 @@
 # Token BI 解决方案
 
+## 当前版本：1.2.0
+
+Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备副屏看板。安装后点击 Mac 菜单栏图标查看账号、剩余额度与重置时间；局域网服务自动启动，扫码即可连接副屏。隐藏面板不停止同步，退出 App 才停止本实例启动的服务。
+
+- 获取逻辑：OAuth 优先，CLI / Web 兜底；副屏读取本地缓存，不因多开页面放大官方请求。
+- Web 布局横屏优先、竖屏兼容，依据实际可见区域适配单/双额度，不按手机型号分支；当前展示支持 5h 与周额度，不补造缺失窗口。
+- 下载：[GitHub Releases](https://github.com/gbs00/Token_BI/releases)。Apple Silicon、ad hoc 签名、未公证，暂不提供自动更新。
+- 开发与发布：[菜单栏实现](docs/TECH_MENUBAR.md)、[看板自适应](docs/TECH_DASHBOARD_RESPONSIVE.md)、[发布步骤](docs/RELEASE.md)、[1.2.0 说明](docs/RELEASE_NOTES_v1.2.0.md)。
+
+下方保留历史需求与实施记录，涉及“大控制台、服务开关、首次引导”的旧描述不代表 1.2.0 的 App 主入口。
+
 补充文档：
 
 - [SETUP.md](/Users/gbs00/我的文件夹/Projects/Token_BI/SETUP.md)：新电脑部署、日常启动、账号登录、副屏设备访问与排障说明

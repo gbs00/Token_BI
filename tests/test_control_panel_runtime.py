@@ -1,12 +1,75 @@
 from __future__ import annotations
 
 import socket
+import io
+import os
+import pytest
 import subprocess
 import sys
 import threading
 import httpx
 
 from scripts import control_panel
+
+
+def test_status_poll_only_reads_runtime_endpoint(monkeypatch) -> None:
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append(path)
+        return {"service": control_panel.MAIN_SERVICE_MARKER, "account": None, "usage": {"state": "empty"}, "dashboard": {"state": "empty", "metrics": []}}
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "123"))
+    monkeypatch.setattr(control_panel, "_main_api_request", request)
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
+    monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
+    payload = control_panel._status_payload()
+    assert calls == ["/api/v1/runtime-status"]
+    assert payload["healthy"] is True
+    assert payload["dashboard"] == {"state": "empty", "metrics": []}
+    assert not {"guide", "chrome_available", "diagnostics", "data_source_status"} & payload.keys()
+
+
+def test_log_tail_reads_bounded_suffix(monkeypatch, tmp_path) -> None:
+    data = ("旧日志\n" * 100000 + "\n".join(f"新日志 {i}" for i in range(30)) + "\n").encode()
+    log = tmp_path / "server.log"
+    log.write_bytes(data)
+    reads = []
+    class Reader(io.BytesIO):
+        def read(self, size=-1):
+            result = super().read(size)
+            reads.append(len(result))
+            return result
+    class TextReader(io.StringIO):
+        def read(self, size=-1):
+            result = super().read(size)
+            reads.append(len(result.encode()))
+            return result
+    monkeypatch.setattr(control_panel, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(type(log), "open", lambda _path, mode="r", **kwargs:
+                        Reader(data) if "b" in mode else TextReader(data.decode()))
+    assert control_panel._tail_log() == "\n".join(f"新日志 {i}" for i in range(10, 30))
+    assert sum(reads) <= 65536
+
+
+def test_log_tail_handles_missing_and_empty_files(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(control_panel, "LOG_DIR", tmp_path)
+    assert control_panel._tail_log() == "No server log yet."
+    (tmp_path / "server.log").write_bytes(b"")
+    assert control_panel._tail_log() == "No server log yet."
+
+
+def test_pid_alive_does_not_spawn_ps(monkeypatch) -> None:
+    def no_subprocess(*args, **kwargs):
+        raise AssertionError("存活检查不应启动 ps 子进程")
+    monkeypatch.setattr(control_panel.subprocess, "run", no_subprocess)
+    assert control_panel._pid_alive(str(os.getpid())) is True
+
+
+@pytest.mark.parametrize("pid", ["0", "-1", "invalid"])
+def test_pid_alive_rejects_invalid_pid_without_waiting(monkeypatch, pid) -> None:
+    def no_wait(*args):
+        raise AssertionError("无效 PID 不得执行 waitpid")
+    monkeypatch.setattr(control_panel.os, "waitpid", no_wait)
+    assert control_panel._pid_alive(pid) is False
 
 
 def test_select_main_port_uses_default_when_available() -> None:
@@ -273,9 +336,6 @@ def test_status_payload_prefers_main_service_account(monkeypatch) -> None:
     )
     monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
     monkeypatch.setattr(control_panel, "_main_runtime_status", lambda: {})
-    monkeypatch.setattr(control_panel, "_diagnostics_items", lambda: [])
-    monkeypatch.setattr(control_panel, "_data_source_status", lambda diagnostics: "")
-    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
     monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
     monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
 
@@ -308,9 +368,6 @@ def test_status_payload_uses_actual_last_successful_source_and_time(monkeypatch)
         },
     )
     monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
-    monkeypatch.setattr(control_panel, "_diagnostics_items", lambda: [])
-    monkeypatch.setattr(control_panel, "_data_source_status", lambda diagnostics: "")
-    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
     monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
     monkeypatch.setattr(control_panel, "_current_main_port", lambda: 8787)
 
@@ -326,6 +383,7 @@ def test_refresh_live_accounts_bootstraps_local_codex_when_no_accounts(monkeypat
         assert path == "/api/v1/dashboard/refresh"
         return {
             "state": "ready",
+            "metrics": [{"metric_type": "weekly", "remaining_pct": 99}],
             "account": {
                 "account_id": "acc_local",
                 "masked_email": "tim****@gmail.com",
@@ -346,6 +404,28 @@ def test_refresh_live_accounts_bootstraps_local_codex_when_no_accounts(monkeypat
     assert payload["ok"] is True
     assert "tim****@gmail.com" in payload["message"]
     assert payload["results"][0]["source_type"] == "oauth"
+
+
+def test_manual_refresh_uses_one_current_account_request(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "123"))
+    monkeypatch.setattr(control_panel, "_main_visible_accounts", lambda: [{"account_id": "old_a"}, {"account_id": "old_b"}])
+
+    def request(method, path, **kwargs):
+        calls.append((method, path))
+        return {"state": "stale", "message": "网络超时", "metrics": [{"remaining_pct": 90}]}
+
+    monkeypatch.setattr(control_panel, "_main_api_request", request)
+    payload = control_panel._refresh_live_accounts()
+    assert calls == [("POST", "/api/v1/dashboard/refresh")]
+    assert payload["ok"] is False
+    assert payload["message"] == "网络超时"
+
+
+def test_manual_refresh_never_claims_success_without_metrics(monkeypatch) -> None:
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "123"))
+    monkeypatch.setattr(control_panel, "_main_api_request", lambda *args, **kwargs: {"state": "ready", "metrics": []})
+    assert control_panel._refresh_live_accounts()["ok"] is False
 
 
 def test_control_panel_uses_single_service_button_and_hidden_qr_modal() -> None:
@@ -411,11 +491,10 @@ def test_status_reports_unhealthy_when_process_exists_but_api_fails(monkeypatch)
     monkeypatch.setattr(control_panel, "_main_runtime_status", unavailable)
     monkeypatch.setattr(control_panel, "_preferred_account", lambda: None)
     monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {})
-    monkeypatch.setattr(control_panel, "_chrome_available", lambda: True)
     monkeypatch.setattr(control_panel, "_tail_log", lambda: "")
-    def no_second_probe():
+    def no_second_probe(*args, **kwargs):
         raise AssertionError("已确认主服务失联，不应继续串行等待诊断接口")
-    monkeypatch.setattr(control_panel, "_diagnostics_items", no_second_probe)
+    monkeypatch.setattr(control_panel, "_main_api_request", no_second_probe)
 
     payload = control_panel._status_payload()
 
@@ -447,3 +526,69 @@ def test_console_rejects_cross_site_control_actions(monkeypatch):
 def test_status_account_does_not_resurrect_local_identity_when_disconnected(monkeypatch):
     monkeypatch.setattr(control_panel, "_preferred_account", lambda: {"account_id": "old"})
     assert control_panel._status_account(True, {"account": None, "access_enabled": False}) is None
+
+
+def test_pairing_keeps_qr_and_url_in_same_snapshot_and_stays_local(monkeypatch):
+    captured = []
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: {"lan": "http://192.168.1.20:8787/dashboard", "fixed": ""})
+    monkeypatch.setattr(control_panel, "_qrcode_svg", lambda url: captured.append(url) or "<svg/>")
+    monkeypatch.setattr(control_panel, "_logout_account_flow", lambda: {"ok": True, "action": "logout"})
+    server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{server.server_port}", trust_env=False) as client:
+            body = client.get("/api/pairing?kind=lan").json()
+            assert body == {"ok": True, "url": captured[0], "svg": "<svg/>"}
+            assert client.get("/api/pairing?kind=fixed").json()["ok"] is False
+            assert client.get("/api/pairing?kind=local").json()["ok"] is False
+            assert client.get("/api/pairing?kind=lan", headers={"Origin": "https://untrusted.example"}).status_code == 403
+            assert client.post("/api/logout", headers={"Origin": "https://untrusted.example"}).status_code == 403
+            assert client.post("/api/logout").json()["action"] == "logout"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(1)
+
+
+def test_parallel_auto_start_and_login_cannot_spawn_concurrently(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def start():
+        calls.append(1)
+        entered.set()
+        assert release.wait(2)
+        return True, "ready"
+    monkeypatch.setattr(control_panel, "_start_main_server_locked", start)
+    first = threading.Thread(target=control_panel._start_main_server_process)
+    second = threading.Thread(target=control_panel._start_main_server_process)
+    first.start()
+    assert entered.wait(1)
+    second.start()
+    assert calls == [1]
+    release.set()
+    first.join(2)
+    second.join(2)
+    assert calls == [1, 1]
+
+
+def test_quit_waits_for_inflight_start_before_stopping(monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def start():
+        entered.set()
+        assert release.wait(2)
+        calls.append("pid_written")
+        return True, "ready"
+    monkeypatch.setattr(control_panel, "_start_main_server_locked", start)
+    monkeypatch.setattr(control_panel, "_stop_main_server_locked", lambda: calls.append("stop") or (True, "stopped"))
+    first = threading.Thread(target=control_panel._start_main_server_process)
+    second = threading.Thread(target=control_panel._stop_main_server_process)
+    first.start()
+    assert entered.wait(1)
+    second.start()
+    assert calls == []
+    release.set()
+    first.join(2)
+    second.join(2)
+    assert calls == ["pid_written", "stop"]

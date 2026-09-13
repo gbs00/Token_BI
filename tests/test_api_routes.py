@@ -342,9 +342,11 @@ def test_runtime_status_reports_only_last_successful_usage(app) -> None:
     assert after["usage"]["updated_at"] is not None
     assert after["usage"]["source_updated_at"] == "2026-04-21T23:00:00+08:00"
     assert after["usage"]["next_sync_at"] is not None
+    assert after["dashboard"] == client.get("/api/v1/dashboard").json()
+    assert after["dashboard"]["account"]["account_id"] == after["account"]["account_id"]
 
 
-def test_service_startup_does_not_launch_browser_worker_for_active_accounts(container) -> None:
+def test_service_startup_only_schedules_sync_without_probing_browser(container, monkeypatch) -> None:
     now = datetime.now(timezone.utc)
     container.account_service._write_accounts(
         [
@@ -363,10 +365,16 @@ def test_service_startup_does_not_launch_browser_worker_for_active_accounts(cont
     container.browser_worker_service.ensure_worker_for_account = lambda account, target_url=None: launched.append(
         account.account_id
     )
+    restored = []
+    scheduled = []
+    monkeypatch.setattr(container.browser_worker_service, "restore_session_snapshot", lambda account: restored.append(account))
+    monkeypatch.setattr(container.usage_sync_coordinator, "start", lambda: scheduled.append(True))
 
     container.startup()
 
     assert launched == []
+    assert restored == []
+    assert scheduled == [True]
 
 
 def test_connector_order_prioritizes_oauth_and_cli_before_web_session(container) -> None:

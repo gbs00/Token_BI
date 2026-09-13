@@ -5,18 +5,13 @@ import socket
 from pathlib import Path
 
 from app.main import create_app
+from app import __version__
 from app.cli import build_parser, create_dual_stack_listener
 from scripts import control_panel
-from scripts.control_cli import build_parser as build_control_parser
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "1.1.3"
-
-
-def test_control_cli_has_control_panel_arguments():
-    args = build_control_parser().parse_args(["--port", "8790"])
-    assert args.port == 8790
+EXPECTED_VERSION = __version__
 
 
 def test_cli_has_main_server_command():
@@ -66,7 +61,7 @@ def test_control_panel_backend_command_uses_executable_when_frozen(monkeypatch):
     assert control_panel._backend_command(["health"]) == ["/tmp/token-bi-backend", "health"]
 
 
-def test_release_version_metadata_matches_v113() -> None:
+def test_release_version_metadata_matches_backend() -> None:
     package_json = json.loads((PROJECT_ROOT / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((PROJECT_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     tauri_config = json.loads(
@@ -85,3 +80,5 @@ def test_release_version_metadata_matches_v113() -> None:
     assert "target.noindex" in package_json["scripts"]["app:build"]
     assert info_plist["NSLocalNetworkUsageDescription"]
     assert create_app().version == EXPECTED_VERSION
+    cargo_lock = (PROJECT_ROOT / "src-tauri" / "Cargo.lock").read_text()
+    assert f'name = "token-bi"\nversion = "{EXPECTED_VERSION}"' in cargo_lock

@@ -633,7 +633,7 @@
           byId("dataSourceValue").textContent = usage ? sourceLabel(usage.source_type) : "等待同步";
           byId("dataSourceState").textContent = usage
             ? (usageReady ? usage.source_detail || usage.connector_name || "已获取官方额度" : usage.message || "等待有效额度数据")
-            : String(payload.data_source_status || "数据源：等待同步").replace(/^数据源：/, "");
+            : (payload.health_error || "服务启动后同步额度");
           byId("sourceBadge").textContent = usageLabel;
           byId("sourceBadge").className = usageReady ? "pill" : "pill warning";
 

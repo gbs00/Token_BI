@@ -1,6 +1,5 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -9,9 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::AppHandle;
 use tauri_plugin_shell::{process::CommandChild, ShellExt};
-use url::Url;
+mod menubar;
 
 const CONTROL_URL: &str = "http://127.0.0.1:8790/";
 const CONTROL_ADDR: &str = "127.0.0.1:8790";
@@ -23,77 +22,7 @@ const CONTROL_HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 type SharedChild = Arc<Mutex<Option<CommandChild>>>;
 
 pub fn run() {
-    let cleanup_done = Arc::new(AtomicBool::new(false));
-    let sidecar_child: SharedChild = Arc::new(Mutex::new(None));
-    let setup_child = sidecar_child.clone();
-    let setup_cleanup = cleanup_done.clone();
-    let run_child = sidecar_child.clone();
-    let run_cleanup = cleanup_done.clone();
-
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
-        .plugin(tauri_plugin_shell::init())
-        .setup(move |app| {
-            let window = create_control_window(app)?;
-
-            let cleanup_child = setup_child.clone();
-            let cleanup_flag = setup_cleanup.clone();
-            window.on_window_event(move |event| {
-                if matches!(event, WindowEvent::CloseRequested { .. }) {
-                    stop_app_services_once(&cleanup_child, &cleanup_flag);
-                }
-            });
-
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-            }
-
-            let startup_window = window.clone();
-            let startup_app = app.handle().clone();
-            let startup_child = setup_child.clone();
-            let startup_cleanup = setup_cleanup.clone();
-            thread::spawn(move || {
-                let result = ensure_control_panel(&startup_app, &startup_child);
-                if startup_cleanup.load(Ordering::SeqCst) {
-                    stop_started_services(&startup_child);
-                    return;
-                }
-
-                match result {
-                    Ok(()) => {
-                        if let Ok(url) = Url::parse(CONTROL_URL) {
-                            if let Err(error) = startup_window.navigate(url) {
-                                let script =
-                                    bootstrap_error_script("控制台无法打开", &error.to_string());
-                                let _ = startup_window.eval(&script);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let script = bootstrap_error_script("本地服务启动失败", &error);
-                        let _ = startup_window.eval(&script);
-                    }
-                }
-            });
-
-            Ok(())
-        })
-        .build(tauri::generate_context!())
-        .expect("error while building Token BI app")
-        .run(move |_app_handle, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                stop_app_services_once(&run_child, &run_cleanup);
-            }
-        });
+    menubar::run();
 }
 
 fn start_control_panel_sidecar(app: &AppHandle) -> Result<CommandChild, String> {
@@ -134,15 +63,6 @@ fn ensure_control_panel(app: &AppHandle, sidecar_child: &SharedChild) -> Result<
     }
 
     wait_for_control_panel_health()
-}
-
-fn create_control_window(app: &tauri::App) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::from("index.html")))
-        .title("Token BI")
-        .inner_size(960.0, 760.0)
-        .min_inner_size(720.0, 560.0)
-        .resizable(true)
-        .build()
 }
 
 fn wait_for_control_panel_health() -> Result<(), String> {
@@ -233,16 +153,6 @@ fn parse_control_health_response(response: &str) -> Result<ControlHealth, String
     Ok(ControlHealth { service })
 }
 
-fn bootstrap_error_script(title: &str, detail: &str) -> String {
-    let payload = serde_json::json!({
-        "title": title,
-        "detail": detail,
-    });
-    format!(
-        "if (window.__TOKEN_BI_BOOTSTRAP__) {{ window.__TOKEN_BI_BOOTSTRAP__.fail({payload}); }}"
-    )
-}
-
 fn stop_app_services_once(sidecar_child: &SharedChild, cleanup_done: &AtomicBool) {
     if cleanup_done.swap(true, Ordering::SeqCst) {
         return;
@@ -267,7 +177,7 @@ fn post_control_shutdown() -> bool {
         return false;
     };
     if stream
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .is_err()
         || stream
             .set_write_timeout(Some(Duration::from_secs(2)))
@@ -322,14 +232,6 @@ mod tests {
         let error = parse_control_health_response(response).expect_err("missing marker must fail");
 
         assert!(error.contains("Token BI"));
-    }
-
-    #[test]
-    fn bootstrap_error_script_escapes_dynamic_failure_text() {
-        let script = bootstrap_error_script("端口被占用", "127.0.0.1:8790 \"busy\"");
-
-        assert!(script.contains("window.__TOKEN_BI_BOOTSTRAP__.fail"));
-        assert!(script.contains("\\\"busy\\\""));
     }
 
     #[test]

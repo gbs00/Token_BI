@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>LSUIElement</key>
+  <true/>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Token BI 使用本地网络向同一局域网内的副屏设备提供额度看板。</string>
 </dict>

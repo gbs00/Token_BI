@@ -241,18 +241,15 @@ def test_dashboard_uses_desktop_bi_layout_styles() -> None:
     assert ".agent-nav" not in css
 
 
-def test_dashboard_landscape_keeps_quota_number_prominent_on_small_ios_screens() -> None:
+def test_dashboard_layout_uses_available_space_instead_of_device_specific_card_heights() -> None:
     css = Path("app/static/css/dashboard.css").read_text(encoding="utf-8")
 
-    assert "@media (orientation: landscape) and (max-height: 500px) and (min-width: 480px)" in css
-    assert "@media (orientation: landscape) and (max-height: 380px) and (max-width: 700px)" in css
+    assert "height: var(--viewport-height)" in css
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
-    assert "width: 158px" in css
-    assert "height: 158px" in css
-    assert "font-size: 38px" in css
-    assert "min-height: 0" in css
-    assert "min-height: 48px" in css
-    assert "font-size: clamp(38px, 11vw, 54px)" not in css
+    assert "min-height: 330px" not in css
+    assert "min-height: 410px" not in css
+    assert "max-width: 700px" not in css
+    assert "font-size: clamp" not in css
 
 
 def test_dashboard_latest_ui_keeps_source_detail_sync_state_and_reset_row(app) -> None:

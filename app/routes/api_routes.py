@@ -116,6 +116,7 @@ def runtime_status(request: Request) -> dict:
         "pid": os.getpid(),
         "account": account.model_dump(mode="json") if account is not None else None,
         "usage": usage,
+        "dashboard": _public_dashboard(cached),
         "access_enabled": container.account_service.access_state()[0],
     }
 
