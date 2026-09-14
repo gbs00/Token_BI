@@ -26,7 +26,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # The packaged service explicitly uses asyncio and never enables reload.
+    excludes=["uvloop", "watchfiles"],
     noarchive=False,
     optimize=0,
 )

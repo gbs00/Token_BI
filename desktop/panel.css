@@ -16,9 +16,7 @@ h2 { font-size: 18px; font-weight: 600; }
 .brand > img { width: 42px; height: 42px; border-radius: 8px; flex-shrink: 0; }
 .brand h1, footer button { white-space: nowrap; }
 .subhead { display: flex; gap: 8px; align-items: center; min-height: 44px; margin: 0 -8px 12px; flex-shrink: 0; }
-.subhead .pin { margin-left: auto; }
 .icon-button { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 6px; }
-.icon-button[aria-pressed="true"] { background: #34567a; }
 .scroll-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
 #home { min-height: 100%; display: flex; flex-direction: column; }
 .account { padding: 14px 0; border-bottom: 1px solid var(--line); }
@@ -67,8 +65,35 @@ footer button + button::before { content: ""; position: absolute; left: 0; heigh
 #qr-url { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; user-select: text; }
 .feedback { flex-shrink: 0; color: #cbdfff; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; max-height: 60px; overflow: auto; padding: 8px 0 0; }
 .setting-row { width: 100%; display: flex; align-items: center; justify-content: space-between; min-height: 56px; border-bottom: 1px solid var(--line); font-size: 15px; }
-.setting-row input { accent-color: var(--blue); width: 20px; height: 20px; }
-.about { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 50px 0; }
+.settings-icon { position: relative; width: 18px; height: 18px; display: block; }
+.settings-icon > img { display: block; }
+.update-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff555c; position: absolute; top: -2px; right: -3px; box-shadow: 0 0 0 2px #262626; }
+.software-update { padding: 22px 0 18px; }
+.update-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.update-heading h2 { font-size: 14px; font-weight: 600; }
+.update-heading > span { color: #aaa; font-size: 12px; font-variant-numeric: tabular-nums; }
+.update-status { display: flex; gap: 10px; align-items: flex-start; margin: 18px 0; min-height: 53px; }
+.update-symbol { width: 28px; height: 28px; border-radius: 6px; background: #3a403b; flex: 0 0 28px; display: grid; place-items: center; }
+.update-symbol img { width: 16px; height: 16px; filter: invert(.85); }
+.update-status h3 { font-size: 13px; line-height: 1.5; font-weight: 550; margin: 0; }
+.update-status p { font-size: 12px; line-height: 1.7; color: #b7bdb7; margin-top: 3px; overflow-wrap: anywhere; }
+.update-symbol[data-tone="available"] { background: #293f56; }
+.update-symbol[data-tone="success"] { background: #284338; }
+.update-symbol[data-tone="error"] { background: #50402e; }
+.release-heading { display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: 12px; color: #c0c5c0; }
+.release-heading .text-button { color: #9cc8ff; font-size: 12px; }
+#release-notes { border-top: 1px solid #3d423d; padding-top: 8px; margin-bottom: 12px; }
+#notes-copy { font: inherit; font-size: 12px; line-height: 1.8; max-height: 96px; overflow: auto; margin: 7px 0 14px; }
+.update-action { min-height: 36px; font-size: 13px; padding: 7px 10px; border-radius: 6px; }
+.update-action img { width: 16px; height: 16px; }
+.update-later { display: flex; margin: 10px auto 0; font-size: 12px; color: #bfc3bf; min-height: 28px; padding: 4px 12px; }
+.download-progress { margin: 6px 0 16px; }
+.download-progress progress { width: 100%; height: 5px; display: block; appearance: none; border: 0; border-radius: 6px; overflow: hidden; background: #494d49; accent-color: #1684fb; }
+.download-progress progress::-webkit-progress-bar { background: #494d49; }
+.download-progress progress::-webkit-progress-value { background: #1684fb; border-radius: 6px; }
+.download-progress progress::-moz-progress-bar { background: #1684fb; }
+.download-progress p { margin-top: 8px; font-size: 11px; color: #b6bdb7; }
+.restart-note { font-size: 12px; color: #b7bdb7; line-height: 1.7; margin-bottom: 13px; }
 .diagnostics-view dt { color: var(--secondary); margin: 18px 0 5px; }
 .diagnostics-view dd { margin: 0; overflow-wrap: anywhere; line-height: 1.5; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.6; color: var(--secondary); }

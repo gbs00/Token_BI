@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleMetrics, tier, resetRemaining, lastSuccess, viewModel } from '../desktop/model.mjs';
+import { visibleMetrics, tier, resetRemaining, lastSuccess, viewModel, updateModel } from '../desktop/model.mjs';
 
 test('quota thresholds apply identically to every window, including 0 and 100', () => {
   assert.deepEqual([0,25,26,50,51,75,76,99,100].map(tier), ['critical','critical','low','low','medium','medium','high','high','high']);
@@ -31,4 +31,28 @@ test('paused access hides cached account and quota', () => {
 });
 test('authoritative empty account cannot fall back to stale console identity', () => {
   assert.equal(viewModel({account:{masked_email:'old'},dashboard:{account:null}}).account, null);
+});
+
+test('every update phase maps to an explicit action and busy guard', () => {
+  for (const [phase, action, disabled] of [
+    ['idle','check',false], ['checking','check',true], ['latest','check',false],
+    ['available','download',false], ['downloading','download',true],
+    ['ready','install',false], ['installing','install',true],
+    ['check_error','check',false], ['download_error','download',false], ['install_error','download',false],
+  ]) {
+    const model = updateModel({phase});
+    assert.equal(model.action, action, phase);
+    assert.equal(model.disabled, disabled, phase);
+    assert.ok(model.label && model.title);
+  }
+});
+test('pending update survives failed checks and indeterminate downloads', () => {
+  const model = updateModel({phase:'check_error',available:true,error:'网络暂不可用'});
+  assert.equal(model.pending, true);
+  assert.equal(model.action, 'download');
+  assert.equal(model.description, '网络暂不可用');
+  assert.equal(updateModel({received:100}).percent, null);
+  assert.equal(updateModel({received:25,total:100}).percent, 25);
+  assert.equal(updateModel({received:200,total:100}).percent, 100);
+  assert.equal(updateModel().pending, false);
 });

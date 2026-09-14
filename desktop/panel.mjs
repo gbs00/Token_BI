@@ -1,4 +1,4 @@
-import { viewModel, tier, resetRemaining, lastSuccess, sources } from './model.mjs';
+import { viewModel, tier, resetRemaining, lastSuccess, sources, updateModel } from './model.mjs';
 
 const $ = id => document.getElementById(id);
 const native = Boolean(window.__TAURI__?.core?.invoke);
@@ -9,7 +9,7 @@ const invoke = (command, args = {}) => native ? window.__TAURI__.core.invoke(com
   ? preview.invoke(command, args) : Promise.reject(new Error('请从 Token BI App 打开，或使用本地预览入口。'));
 const request = action => invoke('panel_action', { action });
 let status = null, boot = { phase: 'starting', visible: true }, view = 'home', kind = 'lan';
-let busy = false, pinned = false, serial = 0, qrSerial = 0, qrURL = '', qrKey = '';
+let busy = false, serial = 0, qrSerial = 0, qrURL = '', qrKey = '';
 let pollRunning = false, nextRead = 0, toastTimer;
 
 function feedback(message) {
@@ -75,8 +75,29 @@ function updateButtons() {
     if (['copy','open_selected'].includes(a)) button.disabled = !qrURL;
   });
   $('refresh-label').textContent = busy ? '处理中' : '刷新';
-  document.querySelector('[data-action="pin"]').setAttribute('aria-pressed', String(pinned));
-  $('pin-toggle').checked = pinned;
+}
+function renderUpdate() {
+  const update = boot.update || {}, model = updateModel(update);
+  $('update-dot').hidden = !model.pending;
+  $('settings-button').setAttribute('aria-label', model.pending ? '设置，有新版本待更新' : '设置');
+  $('current-version').textContent = update.current_version || '';
+  $('update-title').textContent = model.title;
+  $('update-description').textContent = model.phase === 'latest' && update.checked_at
+    ? `上次检查：${new Date(update.checked_at * 1000).toLocaleString('zh-CN')}` : model.description;
+  $('update-icon').src = `./assets/${model.icon}.svg`;
+  $('update-symbol').dataset.tone = model.tone;
+  $('update-action').disabled = model.disabled;
+  $('update-action').querySelector('span').textContent = model.label;
+  $('update-action').querySelector('img').src = `./assets/${model.icon}.svg`;
+  $('release-notes').hidden = !model.pending;
+  $('release-version').textContent = `${update.version || ''} 更新内容`;
+  $('notes-copy').textContent = update.notes || '此版本未提供更新说明。';
+  $('download-progress').hidden = model.phase !== 'downloading';
+  if (model.percent == null) $('progress').removeAttribute('value'); else $('progress').value = model.percent;
+  $('progress-label').textContent = model.percent == null ? `已下载 ${((update.received || 0) / 1048576).toFixed(1)} MiB` : `已下载 ${model.percent}%`;
+  $('restart-note').hidden = model.phase !== 'ready';
+  $('update-later').hidden = !model.pending || model.phase === 'installing';
+  $('update-later').textContent = model.phase === 'downloading' ? '返回额度，后台下载' : '稍后再说';
 }
 function navigate(next) {
   view = next;
@@ -131,7 +152,9 @@ async function poll() {
   if (pollRunning) return;
   pollRunning = true;
   try {
-    boot = await invoke('panel_state'); pinned = boot.pinned;
+    boot = await invoke('panel_state');
+    renderUpdate();
+    if (!boot.visible && $('confirm-dialog').open) $('confirm-dialog').close();
     if (boot.open_qr) navigate('qr');
     if (boot.visible && !document.hidden) {
       if (boot.phase === 'ready' && !busy && Date.now() >= nextRead) {
@@ -174,7 +197,6 @@ async function handleAction(action) {
   if (action === 'cancel') return $('confirm-dialog').close();
   if (action === 'quit') return confirmAction('quit');
   if (action === 'logout') return viewModel(status).authenticated ? confirmAction('logout') : perform('login');
-  if (action === 'pin') { pinned = !pinned; await invoke('panel_pin', {pinned}); updateButtons(); return; }
   if (action === 'copy') { await navigator.clipboard.writeText(qrURL); feedback('链接已复制'); return; }
   if (action === 'open_selected' || action === 'open_local') {
     const result = await request(action === 'open_selected' ? `open_${kind}` : action);
@@ -191,7 +213,17 @@ document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]');
   if (button && !button.disabled) handleAction(button.dataset.action).catch(error => feedback(String(error.message || error)));
 });
-$('pin-toggle').addEventListener('change', () => handleAction('pin').catch(error => feedback(String(error))));
+$('toggle-notes').addEventListener('click', () => {
+  $('notes-copy').hidden = !$('notes-copy').hidden;
+  $('toggle-notes').textContent = $('notes-copy').hidden ? '展开' : '收起';
+  $('toggle-notes').setAttribute('aria-expanded', String(!$('notes-copy').hidden));
+});
+$('update-later').addEventListener('click', () => navigate('home'));
+$('update-action').addEventListener('click', async () => {
+  $('update-action').disabled = true;
+  try { await invoke('update_action', {action: updateModel(boot.update).action}); await poll(); }
+  catch (error) { feedback(String(error.message || error)); renderUpdate(); }
+});
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !$('confirm-dialog').open) {
     event.preventDefault(); if (view !== 'home') navigate('home'); else invoke('panel_hide').catch(error => feedback(String(error)));

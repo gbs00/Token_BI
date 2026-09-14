@@ -23,6 +23,28 @@ export function lastSuccess(summary = {}, now = Date.now()) {
   return minutes < 1 ? '刚刚更新' : minutes < 60 ? `${minutes} 分钟前更新` : `${new Date(target).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 更新`;
 }
 export const sources = { oauth: 'OAuth', cli_rpc: 'CLI RPC', web_session: 'Web Session', dom_fallback: 'Web 页面兼容', local_snapshot: '本地测试数据' };
+export function updateModel(update = {}) {
+  const phase = update.phase || 'idle', version = update.version || '';
+  const entries = {
+    idle: ['检查应用更新', '上次检查：尚未检查', '检查更新', 'check', 'refresh-cw'],
+    checking: ['正在检查更新', '正在连接更新服务…', '正在检查…', 'check', 'refresh-cw'],
+    latest: ['已是最新版本', '检查完成', '检查更新', 'check', 'check'],
+    available: [`发现新版本 ${version}`, '可下载并在准备好后重启安装。', '立即更新', 'download', 'download'],
+    downloading: [`正在下载 ${version}`, '下载期间可继续查看额度。', '下载中…', 'download', 'download'],
+    ready: ['更新已准备好', '安装包已通过签名校验。', '重启完成更新', 'install', 'arrow-up-to-line'],
+    installing: ['正在完成更新', '正在安装并重启 Token BI…', '正在更新…', 'install', 'refresh-cw'],
+    check_error: ['暂时无法检查更新', '', update.available ? '立即更新' : '重新检查', update.available ? 'download' : 'check', 'triangle-alert'],
+    download_error: ['下载未完成', '', '重新下载', 'download', 'triangle-alert'],
+    install_error: ['安装未完成', '', '重新下载', 'download', 'triangle-alert'],
+  };
+  const [title, description, label, action, icon] = entries[phase] || entries.idle;
+  const error = phase.endsWith('_error');
+  return { phase, title, description: update.error || description, label, action, icon,
+    disabled: ['checking', 'downloading', 'installing'].includes(phase),
+    pending: Boolean(update.available), tone: error ? 'error' : phase === 'ready' || phase === 'latest' ? 'success' : update.available ? 'available' : 'neutral',
+    percent: update.total > 0 ? Math.min(100, Math.floor((update.received || 0) / update.total * 100)) : null,
+  };
+}
 export function viewModel(status) {
   const payload = status?.dashboard;
   const allowed = status?.access_enabled !== false;

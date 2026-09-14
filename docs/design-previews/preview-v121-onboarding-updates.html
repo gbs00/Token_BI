@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token BI · 1.2.1 交互原型</title>
+  <link rel="stylesheet" href="./preview-v121-onboarding-updates.css">
+  <script src="./preview-v121-onboarding-updates.js" defer></script>
+</head>
+<body>
+  <header class="workbench-header">
+    <div class="prototype-brand"><img src="../../desktop/assets/icon.png" width="32" height="32" alt=""><div><h1>Token BI <span>1.2.1</span></h1><p>菜单栏引导与应用内更新</p></div></div>
+    <span class="prototype-label">交互原型 · 待确认</span>
+  </header>
+  <main class="workbench">
+    <aside class="review-tools" aria-label="原型演示控制">
+      <h2>演示场景</h2>
+      <label class="control-label" for="scenario">选择起点</label>
+      <select id="scenario">
+        <option value="first">首次启动</option>
+        <option value="daily">日常使用</option>
+        <option value="available">后台发现更新</option>
+        <option value="latest">已是最新版本</option>
+        <option value="offline">检查失败 · 断网</option>
+        <option value="download-error">下载中断</option>
+        <option value="verify-error">签名校验失败</option>
+      </select>
+      <div class="network-control"><label for="network">模拟网络连接</label><input id="network" type="checkbox" role="switch" checked></div>
+      <button id="replay" class="tool-button"><img src="../../desktop/assets/refresh-cw.svg" alt="">重新演示</button>
+      <div class="review-copy">
+        <h2>本轮确认</h2>
+        <ol>
+          <li><strong>找得到入口</strong><p>提示贴近菜单栏图标，点击后进入现有额度面板。</p></li>
+          <li><strong>更新不打断</strong><p>设置红点提醒，用户决定何时下载和重启。</p></li>
+          <li><strong>精简不退化</strong><p>代码与包体评审在原型确认后执行，不新增用户界面。</p></li>
+        </ol>
+      </div>
+      <a class="spec-link" href="../PRD_v1.2.1.md">需求与验收范围 <img src="../../desktop/assets/external-link.svg" alt=""></a>
+      <p class="simulation-note">全部为示例数据。演示版本 1.2.1 → 1.2.2，不连接账号、下载文件或重启应用。</p>
+    </aside>
+    <section class="preview-column" aria-label="菜单栏交互演示">
+      <div class="preview-heading"><span>macOS 菜单栏 · 模拟</span><span>面板宽度 311 px</span></div>
+      <div class="desktop-stage" id="stage">
+        <div class="menu-bar">
+          <span class="menu-context">桌面</span>
+          <div class="menu-items"><img class="wifi-icon" src="./v121-assets/wifi.svg" alt=""><button id="tray" title="Token BI" aria-label="打开 Token BI 菜单栏面板" aria-expanded="false"><img src="../../desktop/assets/icon.png" width="20" height="20" alt=""></button><span class="menu-time">14:32</span></div>
+        </div>
+        <div class="onboarding" id="onboarding" role="dialog" aria-labelledby="onboarding-title" hidden>
+          <button id="dismiss-tip" class="tip-close" aria-label="关闭引导" title="关闭引导"><img src="./v121-assets/x.svg" alt=""></button>
+          <div class="tip-brand"><img src="../../desktop/assets/icon.png" width="36" height="36" alt=""><div><span>Token BI</span><h2 id="onboarding-title">我在这里哦</h2></div></div>
+          <p>Token BI 已常驻菜单栏。<br>点击上方图标，查看额度或扫码连接副屏。</p>
+          <div class="tip-actions"><button id="ack-tip" class="text-button">知道了</button><button id="open-from-tip" class="primary">打开 Token BI</button></div>
+        </div>
+        <article class="panel" id="app-panel" aria-label="Token BI 菜单栏面板" hidden>
+          <header class="brand" id="brand"><img src="../../desktop/assets/icon.png" width="42" height="42" alt=""><h1>Token BI</h1></header>
+          <header class="subhead" id="subhead" hidden><button class="icon-button" data-action="back" title="返回额度" aria-label="返回额度"><img src="../../desktop/assets/chevron-left.svg" alt=""></button><h1 id="view-title">设置</h1></header>
+          <div class="scroll-body">
+            <section id="home" aria-label="账号额度">
+              <div class="account"><div class="account-row"><strong>demo****@example.com</strong><button class="text-button" data-action="logout">退出账号</button></div><p class="secondary">OAuth · 刚刚更新</p></div>
+              <div class="metrics"><section class="metric tier-medium"><div class="metric-heading"><h2>周额度</h2><div class="metric-value"><span class="metric-number">63</span><span class="metric-unit">%</span><small>剩余</small></div></div><div class="bar" role="meter" aria-label="周额度剩余" aria-valuemin="0" aria-valuemax="100" aria-valuenow="63"><div class="bar-fill" style="width:63%"></div></div><p class="reset">重置剩余 2d 19h</p></section></div>
+              <div class="home-actions"><button class="primary" data-action="qr"><img src="../../desktop/assets/qr-code.svg" alt="">扫码连接副屏</button><button class="secondary-button" data-action="dashboard"><img src="../../desktop/assets/external-link.svg" alt="">打开看板</button></div>
+            </section>
+            <section id="settings" class="settings-view" aria-label="设置" hidden>
+              <button class="setting-row" data-action="diagnostics"><span>诊断信息</span><img src="../../desktop/assets/file-text.svg" alt=""></button>
+              <div class="software-update">
+                <div class="update-heading"><h2>Token BI 软件更新</h2><span id="current-version">1.2.1</span></div>
+                <div class="update-status" role="status" aria-live="polite"><span class="update-symbol" id="update-symbol"><img id="update-icon" src="./v121-assets/arrow-up-to-line.svg" alt=""></span><div><h3 id="update-title">保持 Token BI 为最新版本</h3><p id="update-description">上次检查：尚未检查</p></div></div>
+                <div id="release-notes" hidden><div class="release-heading"><span>1.2.2 更新内容</span><button class="text-button" id="toggle-notes" aria-expanded="false" aria-controls="notes-list">展开</button></div><ul id="notes-list" hidden><li>改善睡眠唤醒后的副屏重连。</li><li>优化菜单栏面板的响应。</li></ul></div>
+                <div class="download-progress" id="download-progress" hidden><progress id="progress" max="100" value="0" aria-label="更新下载进度"></progress><p><span id="progress-label">已下载 0%</span><span>保持应用运行</span></p></div>
+                <p class="restart-note" id="restart-note" hidden>重启时副屏会短暂断连，随后自动恢复。</p>
+                <button class="primary update-action" id="update-action"><img src="../../desktop/assets/refresh-cw.svg" alt=""><span>检查更新</span></button>
+                <button class="text-button update-later" id="update-later" hidden>稍后再说</button>
+              </div>
+            </section>
+            <section id="qr" class="qr-view" aria-label="连接副屏" hidden><div class="segments" role="group" aria-label="连接入口"><button data-kind="lan" aria-pressed="true">局域网</button><button data-kind="fixed" aria-pressed="false">固定入口</button></div><div class="qr-area"><img src="./v121-assets/qr-example.svg" alt="示例二维码，指向 example.com 而非真实副屏"></div><p class="connection-note">副屏与 Mac 需连接同一局域网。</p><div class="url-row"><span id="qr-url">https://example.com/token-bi-demo</span></div><button class="secondary-button" data-action="copy"><img src="../../desktop/assets/copy.svg" alt="">复制链接</button></section>
+            <section id="diagnostics" class="diagnostics-view" aria-label="诊断信息" hidden><dl><dt>本地服务</dt><dd>运行中</dd><dt>数据源</dt><dd>OAuth</dd><dt>更新状态</dt><dd id="diag-update">尚未检查</dd></dl><p class="secondary">未读取真实运行日志。</p></section>
+          </div>
+          <footer><button data-action="refresh"><img src="../../desktop/assets/refresh-cw.svg" alt=""><span>刷新</span></button><button data-action="settings" id="settings-button" aria-label="设置"><span class="settings-icon"><img src="../../desktop/assets/settings.svg" alt=""><span class="update-dot" id="update-dot" hidden></span></span>设置</button><button data-action="quit"><img src="../../desktop/assets/power.svg" alt="">退出</button></footer>
+        </article>
+        <div class="closed-hint" id="closed-hint" hidden><img src="../../desktop/assets/icon.png" width="40" height="40" alt=""><span>Token BI 正在菜单栏运行</span></div>
+      </div>
+      <p class="simulation-feedback" id="simulation-feedback" role="status">首次提示贴近顶部图标，不遮挡整个桌面。</p>
+    </section>
+  </main>
+</body>
+</html>

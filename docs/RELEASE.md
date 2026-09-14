@@ -4,7 +4,7 @@
 
 未经用户明确确认，不提交推送、不创建标签、不上传 Release。本项目使用本地验证后手动发布；GitHub Actions 的旧发布工作流处于停用状态，不应与手动发布同时运行。
 
-当前分发为 Apple Silicon macOS App / DMG，使用 ad hoc 签名，未进行 Developer ID 签名或公证；不提供签名自动更新。菜单栏版不再以旧大控制台作为验收入口。
+当前分发为 Apple Silicon macOS App / DMG，使用 ad hoc 签名，未进行 Developer ID 签名或公证；1.2.1 起提供独立签名的 Tauri 更新归档。菜单栏版不再以旧大控制台作为验收入口。
 
 ## 本地构建
 
@@ -12,21 +12,23 @@
 
 ```sh
 ./.venv/bin/python -m playwright install chromium webkit
-./scripts/release_local.sh
+TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD= ./scripts/release_local.sh
 ```
 
-脚本使用临时数据目录，执行 Python、JS、Rust 测试与 Clippy / 格式 / 依赖检查；然后完整构建 control、backend、shell，验证 App 深度签名及当前版本 DMG。不自动安装、不上传。
+脚本使用临时数据目录，执行 Python、JS、Rust 测试与 Clippy / 格式 / 依赖检查；然后完整构建 control、backend、shell，验证 App 深度签名、当前版本 DMG 和真实签名更新归档。安装测试只替换临时副本，不替换本地安装、不上传。
 
 产物：
 
 - `src-tauri/target.noindex/release/bundle/macos/Token BI.app`
 - `src-tauri/target.noindex/release/bundle/dmg/Token BI_<version>_aarch64.dmg`
+- `dist/release-v<version>/`：版本化 DMG、app.tar.gz、app.tar.gz.sig、latest.json、SHA256SUMS；上传这个暂存目录的全部文件。
 
 版本保持一致：`app/__init__.py`、`package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`Cargo.lock`、`tauri.conf.json`。API 和 CLI RPC 共用 Python 版本常量，元数据一致性由测试检查。
 
 ## 验收清单
 
-- App 在菜单栏常驻，首开、重复打开、失焦收起、固定面板和显式退出符合预期。
+- App 在菜单栏常驻，首次引导、重复打开、失焦收起和显式退出符合预期；无固定开关或图钉。
+- 设置可检查更新，有更新时红点持续到安装完成。隐藏不停止下载，签名失败不能安装，安装需用户单独确认。
 - 局域网服务自动启动；8787 冲突时选择可用端口，control 只监听回环。
 - 账号和额度由同一次缓存状态提供；OAuth 优先，缺失窗口不补 0，失败不伪装同步成功。
 - 登录与退出入口有效；退出 Token BI 账号不删除本机 Codex 凭据。
@@ -39,14 +41,16 @@
 ## 手动上传
 
 1. 核对当前分支、差异、版本和 CHANGELOG；仅提交本轮确认的源码、测试、文档及相关设计证据。
-2. 完成上述构建和验收，将 DMG 复制到忽略目录中的发布暂存区；发布文件名使用 `Token.BI_<version>_aarch64.dmg`。
-3. 为该文件生成 SHA-256 校验文件；保留 Python 依赖版本快照与对应提交，方便复现。
+2. 完成上述构建和验收，发布暂存区由 `scripts/prepare_release.py` 生成；不把 DMG 当作 Updater 归档。
+3. 核对 latest.json 的版本、平台、URL、签名内容和所有文件的 SHA-256；保留 Python 依赖快照，方便复现。更新说明修改后重新制备暂存区。
 4. 提交并推送主分支，创建并推送 `v<version>` 标签。禁止移动已有标签或覆盖既有正式附件。
-5. 使用 `gh release create` 上传 DMG、校验文件，版本名和说明来自 `docs/RELEASE_NOTES_v<version>.md`。
-6. 回读 Release，确认发布状态、标签提交、附件名称、大小及校验值。
+5. 使用 `gh release create --draft` 上传完整暂存目录，版本说明来自 `docs/RELEASE_NOTES_v<version>.md`。
+6. 回读草稿附件确认完整及校验值，再 `gh release edit v<version> --draft=false --latest` 发布。检查 latest/download/latest.json 可访问且与本地一致；不得提前暴露不完整清单。
 
 ## 签名与后续工作
 
-Developer ID 证书、公证凭据和 updater 私钥必须保存在仓库外。当前配置中的 updater 公钥是占位符，菜单栏没有注册自动更新流程，不应发布无效 `latest.json`。
+Developer ID 证书、公证凭据和 updater 私钥必须保存在仓库外，私钥权限应为 0600 并安全备份。当前公钥已固化；后续版本必须继续使用同一私钥，不能随意重新生成，否则现有客户端无法校验。私钥不进入客户端或更新说明。
 
-将来启用更新时，需单独实现并验证 Tauri updater 安装归档、签名和 manifest，不将普通 DMG 当作自动更新包。签名、公证、Intel / Universal 支持、干净机器安装与长期常驻测试均应有独立验收记录。
+Actions 工作流仍停用。启用前需由发布者配置 `TAURI_SIGNING_PRIVATE_KEY` 和对应密码 Secret，确认 arm64 runner。新流程只创建包含完整资源的草稿，验收后人工发布，避免与手动流程重复。
+
+Apple 签名/公证、Intel/Universal、干净机器安装、真实运行版本 N → N+1 重启及副屏恢复、长期常驻仍需独立验收。详见 [技术纪要](TECH_v1.2.1.md)。

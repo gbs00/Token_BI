@@ -14,7 +14,6 @@
     <header class="subhead" id="subhead" hidden>
       <button class="icon-button" data-action="back" title="返回额度" aria-label="返回额度"><img src="./assets/chevron-left.svg" alt=""></button>
       <h1 id="view-title">连接副屏</h1>
-      <button class="icon-button pin" data-action="pin" aria-label="固定面板" aria-pressed="false" title="固定面板"><img src="./assets/pin.svg" alt=""></button>
     </header>
     <div class="scroll-body">
       <section id="home" aria-label="账号额度">
@@ -45,9 +44,16 @@
         <button class="primary" data-action="open_selected"><img src="./assets/external-link.svg" alt="">打开看板</button>
       </section>
       <section id="settings" class="settings-view" aria-label="设置" hidden>
-        <div class="setting-row"><label for="pin-toggle">保持面板展开</label><input id="pin-toggle" type="checkbox" role="switch"></div>
         <button class="setting-row" data-action="diagnostics"><span>诊断信息</span><img src="./assets/file-text.svg" alt=""></button>
-        <div class="about"><img src="./assets/icon.png" width="48" height="48" alt=""><strong>Token BI</strong><span class="secondary">菜单栏版 · 本地运行</span></div>
+        <div class="software-update">
+          <div class="update-heading"><h2>Token BI 软件更新</h2><span id="current-version"></span></div>
+          <div class="update-status" role="status" aria-live="polite"><span class="update-symbol" id="update-symbol"><img id="update-icon" src="./assets/refresh-cw.svg" alt=""></span><div><h3 id="update-title">检查应用更新</h3><p id="update-description"></p></div></div>
+          <div id="release-notes" hidden><div class="release-heading"><span id="release-version"></span><button class="text-button" id="toggle-notes" aria-expanded="false" aria-controls="notes-copy">展开</button></div><pre id="notes-copy" hidden></pre></div>
+          <div class="download-progress" id="download-progress" hidden><progress id="progress" max="100" aria-label="更新下载进度"></progress><p id="progress-label"></p></div>
+          <p class="restart-note" id="restart-note" hidden>重启时副屏会短暂断连，随后自动恢复。</p>
+          <button class="primary update-action" id="update-action"><img src="./assets/refresh-cw.svg" alt=""><span>检查更新</span></button>
+          <button class="text-button update-later" id="update-later" hidden>稍后再说</button>
+        </div>
       </section>
       <section id="diagnostics" class="diagnostics-view" aria-label="诊断信息" hidden>
         <dl><dt>本地服务</dt><dd id="diag-health"></dd><dt>最近成功同步</dt><dd id="diag-success"></dd><dt>最近同步结果</dt><dd id="diag-state"></dd></dl>
@@ -57,7 +63,7 @@
     <p id="feedback" class="feedback" role="status" hidden></p>
     <footer>
       <button data-action="refresh"><img src="./assets/refresh-cw.svg" alt=""><span id="refresh-label">刷新</span></button>
-      <button data-action="settings"><img src="./assets/settings.svg" alt="">设置</button>
+      <button data-action="settings" id="settings-button" aria-label="设置"><span class="settings-icon"><img src="./assets/settings.svg" alt=""><span class="update-dot" id="update-dot" hidden></span></span>设置</button>
       <button data-action="quit"><img src="./assets/power.svg" alt="">退出</button>
     </footer>
     <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title"></h2><p id="confirm-copy"></p><div class="dialog-actions"><button data-action="cancel" class="secondary-button">取消</button><button id="confirm-button" class="primary">确认</button></div></dialog>

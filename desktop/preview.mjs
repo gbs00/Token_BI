@@ -1,6 +1,6 @@
 // Explicit preview only. No accounts, sidecars, or production endpoints are accessed.
 export function createPreview(scenario) {
-  let pinned = false, signedIn = scenario !== 'logged-out', failed = scenario === 'error';
+  let signedIn = scenario !== 'logged-out', failed = scenario === 'error';
   const now = Date.now();
   const urls = {local:'http://127.0.0.1:8787/dashboard', lan:'http://192.168.1.20:8787/dashboard', fixed:'http://token-bi-demo.local:8787/dashboard'};
   function status() {
@@ -13,8 +13,8 @@ export function createPreview(scenario) {
     }};
   }
   return {async invoke(command, args) {
-    if (command === 'panel_state') return {phase:'ready',visible:true,pinned};
-    if (command === 'panel_pin') { pinned = args.pinned; return; }
+    if (command === 'panel_state') return {phase:'ready',visible:true,update:{phase:'idle',current_version:'1.2.1'}};
+    if (command === 'update_action') throw new Error('预览模式不会连接真实更新服务。请使用 1.2.1 交互原型查看更新演示。');
     if (command === 'panel_hide' || command === 'panel_quit') return;
     if (command !== 'panel_action') throw new Error('Unknown preview command');
     const action = args.action;

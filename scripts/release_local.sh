@@ -7,6 +7,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
+: "${TAURI_SIGNING_PRIVATE_KEY:?Set TAURI_SIGNING_PRIVATE_KEY to the private key path or CI secret}"
+
 TEST_DATA="$(mktemp -d "${TMPDIR:-/tmp}/token-bi-release.XXXXXX")"
 trap 'rm -rf "$TEST_DATA"' EXIT
 export TOKEN_BI_APP_DATA_DIR="$TEST_DATA"
@@ -29,6 +31,8 @@ test -f "$DMG_PATH"
 codesign --verify --deep --strict "$APP_PATH"
 hdiutil verify "$DMG_PATH"
 "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/verify_bundle.py" "$APP_PATH"
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/prepare_release.py"
+cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target.noindex --test updater_artifact -- --ignored --nocapture
 
 echo "Release artifacts:"
 echo "App: $APP_PATH"

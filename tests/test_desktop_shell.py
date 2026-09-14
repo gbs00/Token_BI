@@ -14,10 +14,12 @@ ROOT = Path(__file__).resolve().parents[1] / "desktop"
 def panel(request):
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as runtime:
-        if not Path(runtime.chromium.executable_path).exists():
-            pytest.skip("Chromium not installed")
-        browser = runtime.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 311, "height": 600}, device_scale_factor=getattr(request, "param", 1), reduced_motion="reduce")
+        param = getattr(request, "param", 1)
+        engine = getattr(runtime, param if isinstance(param, str) else "chromium")
+        if not Path(engine.executable_path).exists():
+            pytest.skip(f"{engine.name} not installed")
+        browser = engine.launch(headless=True)
+        page = browser.new_page(viewport={"width": 311, "height": 600}, device_scale_factor=param if isinstance(param, int) else 1, reduced_motion="reduce")
         def serve(route):
             urlpath = urlsplit(route.request.url).path
             previews = ROOT.parent / "docs/design-previews"
@@ -39,7 +41,10 @@ def panel(request):
           window.__TAURI__ = {core:{invoke:async (command,args={}) => {
             window.calls.push([command,args.action]);
             if(command==='panel_state') { const open_qr=window.openQR; window.openQR=false;
-              return {phase:window.phase || 'ready',message:'启动失败测试',visible:window.visible,open_qr}; }
+              return {phase:window.phase || 'ready',message:'启动失败测试',visible:window.visible,open_qr,update:window.updateState}; }
+            if(command==='update_action') {
+              window.updateState={...window.updateState,phase:{check:'checking',download:'downloading',install:'installing'}[args.action]};
+            }
             if(command==='panel_action' && args.action==='status') return window.payload;
             if(command==='panel_action' && args.action==='refresh') return {ok:false,message:'网络超时'};
             if(command==='panel_action' && args.action?.startsWith('qr_')) return window.qrPayloads[args.action.slice(3)];

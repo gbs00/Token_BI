@@ -13,6 +13,8 @@ use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEven
 
 #[cfg(target_os = "macos")]
 mod macos;
+mod onboarding;
+mod updates;
 
 const PANEL_WIDTH: f64 = 311.0;
 const PANEL_HEIGHT: f64 = 600.0;
@@ -20,7 +22,6 @@ const PANEL_HEIGHT: f64 = 600.0;
 struct DesktopState {
     child: SharedChild,
     shutdown: AtomicBool,
-    pinned: AtomicBool,
     open_qr: AtomicBool,
     bootstrap: Mutex<Value>,
     last_blur: Mutex<Option<Instant>>,
@@ -42,7 +43,6 @@ pub fn run() {
     let state = DesktopState {
         child: Arc::new(Mutex::new(None)),
         shutdown: AtomicBool::new(false),
-        pinned: AtomicBool::new(false),
         open_qr: AtomicBool::new(false),
         bootstrap: Mutex::new(json!({"phase": "idle"})),
         last_blur: Mutex::new(None),
@@ -50,14 +50,17 @@ pub fn run() {
     };
     tauri::Builder::default()
         .manage(state)
+        .manage(updates::Updates::default())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_panel(app)
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             panel_state,
             panel_action,
-            panel_pin,
+            updates::update_action,
+            onboarding::onboarding_action,
             panel_hide,
             panel_quit
         ])
@@ -92,7 +95,7 @@ pub fn run() {
                             let _ = window.hide();
                         }
                     }
-                    WindowEvent::Focused(false) if !state.pinned.load(Ordering::Relaxed) => {
+                    WindowEvent::Focused(false) => {
                         *state.last_blur.lock().unwrap() = Some(Instant::now());
                         if let Some(window) = handle.get_webview_window("main") {
                             let _ = window.hide();
@@ -144,7 +147,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            if let Err(error) = onboarding::prepare(app.handle()) {
+                eprintln!("Token BI onboarding: {error}");
+            }
             launch_services(app.handle());
+            updates::start_scheduler(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -153,9 +160,16 @@ pub fn run() {
             tauri::RunEvent::ExitRequested {
                 code: None, api, ..
             } => api.prevent_exit(),
+            tauri::RunEvent::ExitRequested { code, api, .. }
+                if code != Some(tauri::RESTART_EXIT_CODE)
+                    && app.state::<updates::Updates>().installing() =>
+            {
+                api.prevent_exit()
+            }
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 let state = app.state::<DesktopState>();
                 stop_app_services_once(&state.child, &state.shutdown);
+                app.state::<updates::Updates>().discard_package();
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => show_panel(app),
@@ -216,11 +230,14 @@ fn show_panel(app: &tauri::AppHandle) {
 }
 
 fn show_panel_on_main(app: &tauri::AppHandle) {
+    if let Err(error) = onboarding::acknowledge(app) {
+        eprintln!("Token BI onboarding: {error}");
+    }
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     #[cfg(target_os = "macos")]
-    if let Err(error) = macos::position(app, &window) {
+    if let Err(error) = macos::position(app, &window, PANEL_WIDTH, PANEL_HEIGHT) {
         eprintln!("Token BI panel positioning: {error}");
     }
     #[cfg(not(target_os = "macos"))]
@@ -285,14 +302,18 @@ fn trusted_window(window: &WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn panel_state(window: WebviewWindow, state: tauri::State<DesktopState>) -> Result<Value, String> {
+fn panel_state(
+    window: WebviewWindow,
+    state: tauri::State<DesktopState>,
+    updates: tauri::State<updates::Updates>,
+) -> Result<Value, String> {
     trusted_window(&window)?;
     let mut result = state.bootstrap.lock().unwrap().clone();
     let visible = window.is_visible().unwrap_or(false);
     result["visible"] = json!(visible);
     // Keep tray requests until the bundled page is visible and ready to consume them.
     result["open_qr"] = json!(visible && state.open_qr.swap(false, Ordering::Relaxed));
-    result["pinned"] = json!(state.pinned.load(Ordering::Relaxed));
+    result["update"] = updates.snapshot();
     Ok(result)
 }
 
@@ -319,6 +340,9 @@ async fn panel_action(
     state: tauri::State<'_, DesktopState>,
 ) -> Result<Value, String> {
     trusted_window(&window)?;
+    if app.state::<updates::Updates>().installing() {
+        return Err("正在安装更新，请稍候。".into());
+    }
     if action == "retry_start" {
         launch_services(&app);
         return Ok(json!({"ok": true}));
@@ -339,17 +363,6 @@ async fn panel_action(
 }
 
 #[tauri::command]
-fn panel_pin(
-    window: WebviewWindow,
-    state: tauri::State<DesktopState>,
-    pinned: bool,
-) -> Result<(), String> {
-    trusted_window(&window)?;
-    state.pinned.store(pinned, Ordering::Relaxed);
-    Ok(())
-}
-
-#[tauri::command]
 fn panel_hide(window: WebviewWindow) -> Result<(), String> {
     trusted_window(&window)?;
     window.hide().map_err(|e| e.to_string())
@@ -358,6 +371,9 @@ fn panel_hide(window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn panel_quit(window: WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
     trusted_window(&window)?;
+    if app.state::<updates::Updates>().installing() {
+        return Err("正在安装更新，请等待自动重启。".into());
+    }
     app.exit(0);
     Ok(())
 }
