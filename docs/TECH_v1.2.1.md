@@ -61,3 +61,10 @@
 App/运行时数据由 `du -sk` 测量，受文件系统影响，不是下载大小。更新归档为 68,505,920 字节；全量更新与 DMG 压缩格式不同。
 
 发布授权：用户于本轮明确选择“同时正式发布 v1.2.1”。先完整上传草稿并回读，再正式公开；无需启用 Actions 或上传私钥。
+
+## 发布结果
+
+- 2026-09-14 15:22:41 UTC 正式发布 [v1.2.1](https://github.com/gbs00/Token_BI/releases/tag/v1.2.1)，非草稿、非预发布，并已设为 latest。
+- 代码提交 `fc056811eeae3c6715f246a162170819ff0062f1`，标签 `v1.2.1`。发布后的纪要补录提交不改变此构建标签。
+- 5 个附件均处于 uploaded 状态，GitHub 返回的大小和 SHA-256 与本地一致；公开 updater endpoint 下载得到的 SHA-256 为 `25be055d237cb96bad5b7e4a0c06dec507d975c06b34b22fb300702fd08b23a4`，与已发布 latest.json 匹配。
+- App 未覆盖本地安装。Obsidian `Token BI Roadmap.md` 已保留旧记录，补录 v1.1.3、v1.2.0、本次实现、验收边界及后续 Roadmap。
