@@ -31,6 +31,27 @@ pub(super) fn configure(window: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn popup_tray_menu(
+    tray: &tauri::tray::TrayIcon,
+    window: &WebviewWindow,
+    menu: &tauri::menu::Menu<tauri::Wry>,
+) -> Result<(), String> {
+    MainThreadMarker::new().ok_or("Tray menu must be shown on the main thread")?;
+    // Tauri presents at the cursor without attaching an NSStatusItem menu. Do not
+    // hold the inner tray borrow across AppKit's nested menu event loop.
+    let result = window.popup_menu(menu).map_err(|error| error.to_string());
+    tray.with_inner_tray_icon(|inner| {
+        if let Some(mtm) = MainThreadMarker::new() {
+            if let Some(button) = inner.ns_status_item().and_then(|item| item.button(mtm)) {
+                // tray-icon 0.21 leaves an unattached right-click target highlighted.
+                button.highlight(false);
+            }
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    result
+}
+
 pub(super) fn position(
     app: &tauri::AppHandle,
     window: &WebviewWindow,

@@ -108,45 +108,63 @@ pub fn run() {
             let qr = MenuItem::with_id(app, "qr", "扫码连接副屏", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Token BI", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &qr, &quit])?;
-            TrayIconBuilder::with_id("token-bi")
+            let tray = TrayIconBuilder::with_id("token-bi")
                 .icon(tauri::include_image!("icons/icon.png"))
                 .tooltip("Token BI")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
-                    "qr" => {
-                        app.state::<DesktopState>()
-                            .open_qr
-                            .store(true, Ordering::Relaxed);
-                        show_panel(app);
-                    }
-                    _ => show_panel(app),
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let just_hidden = app
-                                .state::<DesktopState>()
-                                .last_blur
-                                .lock()
-                                .unwrap()
-                                .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else if !just_hidden {
-                                show_panel(app);
-                            }
+                .show_menu_on_left_click(false);
+            // macOS 27 consumes left clicks when NSStatusItem has a resident menu
+            // (tray-icon #355). Keep it detached and present it on right press only.
+            #[cfg(not(target_os = "macos"))]
+            let tray = tray.menu(&menu);
+            tray.on_menu_event(|app, event| match event.id.as_ref() {
+                "quit" => app.exit(0),
+                "qr" => {
+                    app.state::<DesktopState>()
+                        .open_qr
+                        .store(true, Ordering::Relaxed);
+                    show_panel(app);
+                }
+                _ => show_panel(app),
+            })
+            .on_tray_icon_event(move |tray, event| {
+                #[cfg(target_os = "macos")]
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    button_state: MouseButtonState::Down,
+                    ..
+                } = event
+                {
+                    if let Some(window) = tray.app_handle().get_webview_window("main") {
+                        let _ = window.hide();
+                        if let Err(error) = macos::popup_tray_menu(tray, &window, &menu) {
+                            eprintln!("Token BI tray menu: {error}");
                         }
                     }
-                })
-                .build(app)?;
+                    return;
+                }
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    let app = tray.app_handle();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let just_hidden = app
+                            .state::<DesktopState>()
+                            .last_blur
+                            .lock()
+                            .unwrap()
+                            .is_some_and(|at| at.elapsed() < Duration::from_millis(250));
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
+                        } else if !just_hidden {
+                            show_panel(app);
+                        }
+                    }
+                }
+            })
+            .build(app)?;
             if let Err(error) = onboarding::prepare(app.handle()) {
                 eprintln!("Token BI onboarding: {error}");
             }
