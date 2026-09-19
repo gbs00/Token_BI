@@ -55,7 +55,9 @@ class AccountService:
             raw["access_revision"] = int(raw.get("access_revision", 0)) + 1
             self._write_payload(raw)
 
-    def commit_synced_account(self, proposed: AccountRecord, revision: int) -> Optional[AccountRecord]:
+    def commit_synced_account(
+        self, proposed: AccountRecord, revision: int, *, validated: bool = True,
+    ) -> Optional[AccountRecord]:
         # 校验接入代次，避免退出后迟到的采集结果重新创建账号。
         with self._lock:
             if self.access_state() != (True, revision):
@@ -71,8 +73,8 @@ class AccountService:
                     "session_storage_path": str(self._settings.runtime_contexts_dir / account_id),
                 })
             committed = proposed.model_copy(update={
-                "status": AccountStatus.ACTIVE,
-                "last_validated_at": datetime.now(timezone.utc),
+                "status": AccountStatus.ACTIVE if validated else AccountStatus.PENDING,
+                "last_validated_at": datetime.now(timezone.utc) if validated else None,
             })
             if index is None:
                 accounts.append(committed)

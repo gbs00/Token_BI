@@ -362,9 +362,7 @@ def test_service_startup_only_schedules_sync_without_probing_browser(container, 
         ]
     )
     launched: list[str] = []
-    container.browser_worker_service.ensure_worker_for_account = lambda account, target_url=None: launched.append(
-        account.account_id
-    )
+    monkeypatch.setattr(container.browser_worker_service, "start_login_session", lambda **kwargs: launched.append(kwargs))
     restored = []
     scheduled = []
     monkeypatch.setattr(container.browser_worker_service, "restore_session_snapshot", lambda account: restored.append(account))

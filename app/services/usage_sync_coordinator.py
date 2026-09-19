@@ -211,6 +211,15 @@ class UsageSyncCoordinator:
         with self._state_lock:
             generation = self._generation
             enabled, revision = self._usage_service.access_state()
+            if enabled:
+                changed = self._usage_service.pending_local_identity(account_id)
+                if changed is not None:
+                    # Identity is local metadata, not proof of a successful quota sync.
+                    self._current = self._usage_service.empty_dashboard()
+                    self._snapshot_store.clear()
+                    self._current = self._usage_service.commit_dashboard(
+                        self._current.model_copy(update={"account": changed}), revision,
+                    )
         if not enabled:
             return self.get_dashboard(account_id)
         deadline = time.monotonic() + self.SYNC_TIMEOUT_SECONDS

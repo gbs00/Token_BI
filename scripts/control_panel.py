@@ -13,11 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from app.app_paths import resolve_app_data_dir, resolve_project_root
 from app.process_lifecycle import stop_owned_process, stop_owned_chrome_workers, owns_dev_service
 from app.http_access import allows_local_management
+from app.local_http import open_local_url
 import psutil
 
 
@@ -346,6 +347,7 @@ def _qrcode_svg(url: str) -> str:
 
 
 _main_start_lock = threading.Lock()
+_shutdown_requested = threading.Event()
 
 
 def _start_main_server_process() -> tuple[bool, str]:
@@ -355,9 +357,19 @@ def _start_main_server_process() -> tuple[bool, str]:
 
 
 def _start_main_server_locked() -> tuple[bool, str]:
+    if _shutdown_requested.is_set():
+        return False, "Token BI 正在退出，无法启动服务。"
     running, pid = _main_server_running()
     if running:
-        return True, f"Token BI is already running · PID {pid or '--'} · Port {_current_main_port()}"
+        try:
+            health = _main_api_request("GET", "/api/v1/health", timeout=3)
+        except RuntimeError:
+            health = {}
+        if health.get("ok") and health.get("service") == MAIN_SERVICE_MARKER and str(health.get("pid")) == pid:
+            return True, f"Token BI is already running · PID {pid or '--'} · Port {_current_main_port()}"
+        ok, message = _stop_main_server_locked()
+        if not ok:
+            return False, message
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -399,9 +411,9 @@ def _start_main_server_locked() -> tuple[bool, str]:
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
     _write_runtime_state(port=port, pid=process.pid)
     if not _wait_for_main_server(port=port):
-        _stop_pid(str(process.pid))
-        PID_FILE.unlink(missing_ok=True)
-        _clear_runtime_state()
+        stopped, message = _stop_main_server_locked()
+        if not stopped:
+            return False, f"主服务启动超时；{message}"
         return False, "Token BI start command completed, but the API did not become ready in time."
     return True, f"Token BI started · PID {process.pid} · Port {port}"
 
@@ -415,6 +427,7 @@ def _stop_main_server_process() -> tuple[bool, str]:
 def _stop_main_server_locked() -> tuple[bool, str]:
     stopped = False
     messages = []
+    had_runtime = PID_FILE.exists() or RUNTIME_STATE_FILE.exists()
     if PID_FILE.exists():
         existing_pid = PID_FILE.read_text(encoding="utf-8").strip()
         if existing_pid and _pid_alive(existing_pid):
@@ -422,8 +435,9 @@ def _stop_main_server_locked() -> tuple[bool, str]:
                 return False, f"Token BI 主服务无法停止（PID {existing_pid}）。"
             stopped = True
             messages.append(f"Token BI stopped (PID {existing_pid}).")
-        PID_FILE.unlink(missing_ok=True)
-
+    if had_runtime and not _port_available(_current_main_port()):
+        return False, "主服务端口仍被占用，未确认完全停止；请检查后重试。"
+    PID_FILE.unlink(missing_ok=True)
     if stopped:
         _clear_runtime_state()
         return True, " ".join(dict.fromkeys(messages))
@@ -449,13 +463,16 @@ def _main_api_request(method: str, path: str, payload: dict | None = None, timeo
         method=method,
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with open_local_url(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
+            payload = json.loads(raw) if raw else {}
+            if not isinstance(payload, dict):
+                raise ValueError("Main service response must be a JSON object.")
+            return payload
     except HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="ignore")
         raise RuntimeError(raw or f"Main service returned HTTP {exc.code}.") from exc
-    except (URLError, OSError) as exc:
+    except (URLError, OSError, ValueError) as exc:
         raise RuntimeError(f"Unable to reach Token BI service: {exc}") from exc
 
 
@@ -669,7 +686,7 @@ def _status_payload() -> dict:
         try:
             runtime_status = _main_runtime_status()
         except RuntimeError:
-            health_error = "主服务进程存在，但状态接口未响应；请退出并重新打开 Token BI。"
+            health_error = "主服务进程存在，但状态接口未响应；请点击重试以恢复本地服务。"
             runtime_status = {"account": _preferred_account()}
     healthy = running and runtime_status.get("service") == MAIN_SERVICE_MARKER
     account = _status_account(running, runtime_status)
@@ -819,9 +836,21 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/app/shutdown":
-            ok, message = _stop_main_server_process()
-            _close_token_bi_chrome_workers()
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            expected_pid = self.headers.get("X-Token-BI-Control-Pid")
+            if expected_pid is not None and expected_pid != str(os.getpid()):
+                self._send_json({"ok": False, "message": "控制服务实例已变化，拒绝停止其他实例。"})
+                return
+            _shutdown_requested.set()
+            try:
+                ok, message = _stop_main_server_process()
+                if ok:
+                    _close_token_bi_chrome_workers()
+            except (OSError, RuntimeError) as exc:
+                ok, message = False, f"停止后台失败：{exc}"
+            if ok:
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            else:
+                _shutdown_requested.clear()
             self._send_json({"ok": ok, "message": message or "Token BI app services stopped."})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")

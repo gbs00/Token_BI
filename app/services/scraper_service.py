@@ -5,15 +5,12 @@ from app.models.account import identity_key
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from hashlib import md5
 from typing import Any, Iterable, Optional
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
 
 from app.config import Settings
-from app.models.account import AccountRecord
 
 
 class ScraperUnavailableError(RuntimeError):
@@ -46,12 +43,6 @@ class ScraperService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def fetch_usage(self, account: AccountRecord) -> dict:
-        if self._settings.mock_scraper_enabled:
-            return self._build_mock_payload(account)
-        artifacts = self._load_page_artifacts(account.session_storage_path)
-        return self._parse_artifacts(artifacts)
-
     def fetch_usage_from_page(self, page) -> dict:
         try:
             artifacts = self._collect_page_artifacts(page)
@@ -60,24 +51,6 @@ class ScraperService:
             raise ScraperUnavailableError("Codex usage page request timed out.") from exc
         except PlaywrightError as exc:
             raise ScraperUnavailableError("Unable to access the Codex usage page.") from exc
-
-    def _load_page_artifacts(self, context_dir: str) -> dict:
-        try:
-            with sync_playwright() as playwright:
-                browser_context = playwright.chromium.launch_persistent_context(
-                    user_data_dir=context_dir,
-                    channel=self._settings.playwright_channel or None,
-                    headless=self._settings.playwright_headless,
-                )
-                try:
-                    page = browser_context.pages[0] if browser_context.pages else browser_context.new_page()
-                    return self._collect_page_artifacts(page)
-                finally:
-                    browser_context.close()
-        except PlaywrightTimeoutError as exc:
-            raise ScraperUnavailableError("Timed out while loading Codex analytics page.") from exc
-        except PlaywrightError as exc:
-            raise ScraperUnavailableError(f"Unable to access Codex analytics page: {exc}") from exc
 
     def _collect_page_artifacts(self, page) -> dict:
         network_json_texts: list[str] = []
@@ -555,21 +528,3 @@ class ScraperService:
 
     def _normalize_text(self, value: str) -> str:
         return re.sub(r"\s+", " ", value or "").strip()
-
-    def _build_mock_payload(self, account: AccountRecord) -> dict:
-        digest = md5(account.account_id.encode("utf-8")).hexdigest()
-        session_pct = 65 + int(digest[:2], 16) % 36
-        weekly_pct = 40 + int(digest[2:4], 16) % 56
-        session_hours = 2 + int(digest[4:6], 16) % 6
-        weekly_days = 2 + int(digest[6:8], 16) % 6
-        weekly_hours = 4 + int(digest[8:10], 16) % 18
-        now = datetime.now().astimezone()
-        return {
-            "session_remaining_pct": session_pct,
-            "session_reset_at": now + timedelta(hours=session_hours),
-            "weekly_remaining_pct": weekly_pct,
-            "weekly_reset_at": now + timedelta(days=weekly_days, hours=weekly_hours),
-            "updated_at": now,
-            "is_estimated": True,
-            "source_detail": "mock",
-        }

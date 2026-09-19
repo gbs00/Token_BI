@@ -33,8 +33,8 @@ def verify(bundle: Path) -> None:
         main_port = free_port()
     opener = build_opener(ProxyHandler({}))
 
-    def request(port: int, path: str, method: str = "GET") -> dict:
-        with opener.open(Request(f"http://127.0.0.1:{port}{path}", method=method), timeout=40) as response:
+    def request(port: int, path: str, method: str = "GET", *, headers: dict | None = None) -> dict:
+        with opener.open(Request(f"http://127.0.0.1:{port}{path}", method=method, headers=headers or {}), timeout=40) as response:
             return json.load(response)
 
     with tempfile.TemporaryDirectory(prefix="token-bi-bundle-check-") as directory:
@@ -76,7 +76,9 @@ def verify(bundle: Path) -> None:
             finally:
                 try:
                     if ready:
-                        assert request(control_port, "/api/app/shutdown", "POST")["ok"]
+                        assert request(control_port, "/api/app/shutdown", "POST", headers={
+                            "X-Token-BI-Control-Pid": str(process.pid),
+                        })["ok"]
                     process.wait(timeout=10)
                 finally:
                     if process.poll() is None:

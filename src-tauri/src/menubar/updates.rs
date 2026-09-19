@@ -283,7 +283,17 @@ fn install(app: &tauri::AppHandle) -> Result<(), String> {
         let result = package.read_verified().and_then(|bytes| {
             ensure_writable_install()?;
             let state = app.state::<DesktopState>();
-            super::super::stop_app_services_once(&state.child, &state.shutdown);
+            if state
+                .child
+                .lock()
+                .map_err(|_| "无法读取后台服务状态。")?
+                .is_none()
+            {
+                return Err(
+                    "当前后台不归本实例管理，请先退出其来源应用并重新打开 Token BI。".into(),
+                );
+            }
+            super::super::stop_app_services_once(&state.child, &state.shutdown)?;
             release.install(bytes).map_err(|e| friendly_error(&e))
         });
         // restart() does not return; do not rely on stack unwinding to remove it.

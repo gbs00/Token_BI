@@ -25,11 +25,13 @@ from app.services.usage_connectors import (
     ConnectorFailureCategory,
     ConnectorNetworkError,
     ConnectorNotApplicableError,
+    ConnectorRateLimitedError,
     ConnectorTimeoutError,
     LocalCodexConnector,
     UsageConnectorManager,
     UsageConnectorResult,
     WebSessionConnector,
+    resolve_codex_binary,
 )
 
 
@@ -166,6 +168,9 @@ for line in sys.stdin:
     popen = subprocess.Popen
     children = []
     def start_fake(_args, **kwargs):
+        assert _args[0] == "/synthetic/codex"
+        assert kwargs["env"]["PATH"].split(":")[0] == "/synthetic"
+        assert "/usr/local/bin" in kwargs["env"]["PATH"].split(":")
         child = popen([sys.executable, "-u", "-c", script], **kwargs)
         children.append(child)
         return child
@@ -224,6 +229,59 @@ def test_oauth_identity_key_distinguishes_same_masked_emails(test_settings):
         assert email not in json.dumps(payload, default=str)
         keys.append(payload["account_identity_key"])
     assert keys[0] != keys[1]
+
+
+@pytest.mark.parametrize("installed", ["/opt/homebrew/bin/codex", "/usr/local/bin/codex",
+                                       "/Applications/Codex.app/Contents/Resources/codex"])
+def test_cli_resolver_finds_installed_binary_without_shell_path(monkeypatch, installed):
+    from app.services import usage_connectors
+    monkeypatch.setattr(usage_connectors.shutil, "which", lambda binary: binary if binary == installed else None)
+    assert resolve_codex_binary() == installed
+    assert CodexCliRpcConnector().cli_available() is True
+    assert resolve_codex_binary("/missing/custom-codex") is None
+
+
+def test_cli_resolver_honors_path_and_requires_executable(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert resolve_codex_binary(str(binary)) is None
+    binary.chmod(0o700)
+    assert resolve_codex_binary() == str(binary)
+
+
+def test_expired_oauth_still_exposes_changed_local_identity(tmp_path):
+    path = tmp_path / "auth.json"
+    path.write_text(json.dumps({"tokens": {"access_token": _build_unsigned_jwt({"email": "new@example.com", "exp": 1})}}))
+    connector = CodexOAuthConnector(auth_paths=[path])
+    assert connector.auth_available() is False
+    assert connector.local_identity()[0] == "new****@example.com"
+
+
+def test_malformed_local_identity_does_not_prevent_fallback(tmp_path, test_settings):
+    path = tmp_path / "auth.json"
+    path.write_text("[]", encoding="utf-8")
+    manager = UsageConnectorManager([CodexOAuthConnector(auth_paths=[path]), ReadyConnector()])
+    assert manager.local_identity() is None
+    assert manager.fetch_usage(_build_account(test_settings)).connector_name == "ready"
+
+
+@pytest.mark.parametrize("failure,category", [
+    (AnalyticsPageChangedError("changed"), ConnectorFailureCategory.SOURCE_CHANGED),
+    (ConnectorNetworkError("offline"), ConnectorFailureCategory.NETWORK_ERROR),
+    (ConnectorRateLimitedError("busy"), ConnectorFailureCategory.RATE_LIMITED),
+    (SessionExpiredError("expired"), ConnectorFailureCategory.AUTH_REQUIRED),
+])
+def test_absent_local_sources_do_not_mask_web_failure(test_settings, failure, category):
+    manager = UsageConnectorManager([
+        TypedFailingConnector("codex_oauth", ConnectorNotApplicableError("missing")),
+        TypedFailingConnector("codex_cli_rpc", ConnectorNotApplicableError("missing")),
+        TypedFailingConnector("web_session", failure),
+    ])
+    with pytest.raises(ConnectorChainError) as result:
+        manager.fetch_usage(_build_account(test_settings))
+    assert result.value.primary_failure.category == category
+    assert result.value.primary_failure.connector_name == "web_session"
 
 
 def test_local_codex_connector_reads_snapshot(test_settings) -> None:

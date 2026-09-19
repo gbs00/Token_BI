@@ -10,10 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.error import URLError
-from urllib.request import urlopen
 import re
 
 from playwright.sync_api import sync_playwright
+
+from app.local_http import open_local_url
 
 from app.config import Settings
 from app.models.account import AccountRecord
@@ -107,31 +108,6 @@ class BrowserWorkerService:
 
             self._sessions[account_id] = session
             return self._snapshot(session)
-
-    def ensure_worker_for_account(
-        self,
-        account: AccountRecord,
-        target_url: Optional[str] = None,
-    ) -> BrowserSessionSnapshot:
-        context_dir = Path(account.session_storage_path)
-        with self._lock:
-            session = self._sessions.get(account.account_id)
-            if session is not None and self._debug_port_ready(session.debug_port):
-                current_url = self._probe_current_url(session.debug_port)
-                if current_url:
-                    session.current_url = current_url
-                session.last_seen_at = datetime.now(timezone.utc)
-                return self._snapshot(session)
-
-            restored = self._restore_existing_session(account)
-            if restored is not None:
-                return self._snapshot(restored)
-
-        return self.start_login_session(
-            account_id=account.account_id,
-            context_dir=context_dir,
-            target_url=target_url or self._settings.analytics_url,
-        )
 
     def fetch_usage(self, account: AccountRecord) -> dict:
         with self._lock:
@@ -247,9 +223,9 @@ class BrowserWorkerService:
 
     def _debug_port_ready(self, debug_port: int) -> bool:
         try:
-            with urlopen(self._debug_version_url(debug_port), timeout=2) as response:
+            with open_local_url(self._debug_version_url(debug_port), timeout=2) as response:
                 return response.status == 200
-        except (URLError, OSError):
+        except (URLError, OSError, ValueError):
             return False
 
     def _probe_current_url(self, debug_port: int) -> Optional[str]:

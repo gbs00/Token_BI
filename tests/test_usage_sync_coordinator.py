@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import base64
 import stat
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+import pytest
 
 from app.models.account import AccountStatus, CreateAccountRequest
 from app.models.usage_snapshot import PageState
@@ -13,6 +15,9 @@ from app.services.usage_connectors import (
     ConnectorChainError,
     ConnectorFailure,
     ConnectorFailureCategory,
+    CodexOAuthConnector,
+    ConnectorNetworkError,
+    UsageConnectorManager,
     UsageConnectorResult,
 )
 from app.services.usage_service import UsageService
@@ -20,6 +25,9 @@ from app.services.usage_sync_coordinator import UsageSyncCoordinator
 
 
 class ControlledConnectorManager:
+    def local_identity(self):
+        return None
+
     def __init__(self) -> None:
         self.calls = 0
         self.failure: ConnectorFailure | None = None
@@ -199,6 +207,70 @@ def test_transient_failure_preserves_last_success_and_account_state(container) -
     assert stale.metrics == ready.metrics
     assert "live browser" not in (stale.message or "").lower()
     assert container.account_service.get_account(account.account_id).status == AccountStatus.ACTIVE
+
+
+@pytest.mark.parametrize("new_email", ["other@example.com", "user.two@example.com", "user.one@example.com"])
+def test_local_oauth_identity_is_checked_before_network_failure(container, tmp_path, new_email):
+    path = tmp_path / "auth.json"
+    def login(email):
+        encoded = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode().rstrip("=")
+        path.write_text(json.dumps({"tokens": {"access_token": f"header.{encoded}.signature"}}))
+    login("user.one@example.com")
+    started, release = threading.Event(), threading.Event()
+    failing = False
+    def fetch(*_args):
+        if failing:
+            started.set()
+            assert release.wait(3)
+            raise ConnectorNetworkError("offline")
+        return {"weekly_remaining_pct": 82}
+    manager = UsageConnectorManager([CodexOAuthConnector(auth_paths=[path], http_get=fetch)])
+    coordinator, _, store = _build_coordinator(container, manager)
+    ready = coordinator.refresh()
+    assert ready.state == PageState.READY and store.snapshot_path.exists()
+    login(new_email)
+    failing = True
+    worker = threading.Thread(target=coordinator.refresh)
+    worker.start()
+    try:
+        assert started.wait(2)
+        pending = coordinator.get_dashboard()
+        if new_email != "user.one@example.com":
+            assert pending.metrics == []
+            assert pending.account.identity_key != ready.account.identity_key
+            assert pending.account.status == AccountStatus.PENDING
+            assert pending.account.last_validated_at is None
+            assert not store.snapshot_path.exists()
+        else:
+            assert pending.metrics == ready.metrics
+            assert store.snapshot_path.exists()
+    finally:
+        release.set()
+        worker.join(3)
+    assert not worker.is_alive()
+    result = coordinator.get_dashboard()
+    restored, _, _ = _build_coordinator(container, manager)
+    if new_email != "user.one@example.com":
+        assert result.metrics == []
+        assert restored.get_dashboard().metrics == []
+    else:
+        assert result.state == PageState.STALE
+        assert result.metrics == ready.metrics
+
+
+def test_expired_changed_identity_clears_old_quota_without_upstream_request(container, tmp_path):
+    _create_active_account(container)
+    coordinator, _, store = _build_coordinator(container)
+    assert coordinator.refresh().metrics
+    encoded = base64.urlsafe_b64encode(b'{"email":"new@example.com","exp":1}').decode().rstrip("=")
+    path = tmp_path / "auth.json"
+    path.write_text(json.dumps({"tokens": {"access_token": f"header.{encoded}.signature"}}))
+    manager = UsageConnectorManager([CodexOAuthConnector(auth_paths=[path], http_get=lambda *_args: pytest.fail("expired token must not be sent"))])
+    restored, _, _ = _build_coordinator(container, manager)
+    result = restored.refresh()
+    assert result.metrics == []
+    assert result.account.masked_email == "new****@example.com"
+    assert not store.snapshot_path.exists()
 
 
 def test_only_definitive_auth_failure_marks_account_expired(container) -> None:
@@ -401,7 +473,7 @@ def test_account_write_failure_is_visible_as_failed_sync(container, monkeypatch)
     _create_active_account(container)
     coordinator, _, _ = _build_coordinator(container)
     coordinator.refresh()
-    def fail(*_args):
+    def fail(*_args, **_kwargs):
         raise OSError("synthetic write failure")
     monkeypatch.setattr(container.account_service, "commit_synced_account", fail)
     assert coordinator.refresh().state == PageState.STALE

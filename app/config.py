@@ -27,10 +27,7 @@ class Settings:
     browser_app_name: str
     browser_debug_host: str
     browser_debug_base_port: int
-    playwright_channel: str
-    playwright_headless: bool
     scrape_timeout_ms: int
-    mock_scraper_enabled: bool
     codex_auth_paths: list[Path]
     codex_oauth_usage_url: str
     codex_cli_bin: str
@@ -51,6 +48,8 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    if os.getenv("TOKEN_BI_USE_MOCK_SCRAPER", "false").lower() in {"1", "true", "yes"}:
+        raise ValueError("旧 mock 开关已停用，请使用 scripts/start_mock_preview.sh 进行隔离预览。")
     project_root = resolve_project_root()
     app_data_dir = resolve_app_data_dir()
     config_dir = app_data_dir / "config"
@@ -88,12 +87,7 @@ def get_settings() -> Settings:
         browser_app_name=os.getenv("TOKEN_BI_BROWSER_APP_NAME", "Google Chrome"),
         browser_debug_host=os.getenv("TOKEN_BI_BROWSER_DEBUG_HOST", "127.0.0.1"),
         browser_debug_base_port=int(os.getenv("TOKEN_BI_BROWSER_DEBUG_BASE_PORT", "9222")),
-        playwright_channel=os.getenv("TOKEN_BI_PLAYWRIGHT_CHANNEL", "msedge"),
-        playwright_headless=os.getenv("TOKEN_BI_PLAYWRIGHT_HEADLESS", "true").lower()
-        in {"1", "true", "yes"},
         scrape_timeout_ms=int(os.getenv("TOKEN_BI_SCRAPE_TIMEOUT_MS", "15000")),
-        mock_scraper_enabled=os.getenv("TOKEN_BI_USE_MOCK_SCRAPER", "false").lower()
-        in {"1", "true", "yes"},
         codex_auth_paths=codex_auth_paths,
         codex_oauth_usage_url=os.getenv(
             "TOKEN_BI_CODEX_OAUTH_USAGE_URL",

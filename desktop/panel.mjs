@@ -204,7 +204,7 @@ async function handleAction(action) {
     if (!native) feedback('预览模式，不打开真实看板');
     return;
   }
-  if (action === 'retry') return perform(boot.phase === 'error' || status?.running === false ? 'retry_start' : viewModel(status).state === 'reauth_required' ? 'login' : 'refresh');
+  if (action === 'retry') return perform(boot.phase === 'error' || status?.healthy === false || status?.running === false ? 'retry_start' : viewModel(status).state === 'reauth_required' ? 'login' : 'refresh');
   if (action === 'refresh' || action === 'login') return perform(action);
 }
 document.addEventListener('click', event => {

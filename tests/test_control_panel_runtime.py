@@ -145,6 +145,8 @@ def test_start_main_server_cleans_runtime_files_when_readiness_fails(monkeypatch
     monkeypatch.setattr(control_panel, "_select_main_port", lambda start_port, max_port: 8787)
     monkeypatch.setattr(control_panel, "_backend_command", lambda args: ["fake-token-bi"])
     monkeypatch.setattr(control_panel, "_wait_for_main_server", lambda port=None: False)
+    monkeypatch.setattr(control_panel, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(control_panel, "_port_available", lambda _port: True)
     monkeypatch.setattr(control_panel.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
 
     ok, message = control_panel._start_main_server_process()
@@ -177,6 +179,8 @@ def test_packaged_main_server_resets_pyinstaller_environment(monkeypatch, tmp_pa
     monkeypatch.setattr(control_panel, "_select_main_port", lambda start_port, max_port: 8787)
     monkeypatch.setattr(control_panel, "_backend_command", lambda args: ["fake-token-bi"])
     monkeypatch.setattr(control_panel, "_wait_for_main_server", lambda port=None: False)
+    monkeypatch.setattr(control_panel, "_pid_alive", lambda _pid: False)
+    monkeypatch.setattr(control_panel, "_port_available", lambda _port: True)
     monkeypatch.setattr(control_panel.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(control_panel.sys, "frozen", True, raising=False)
 

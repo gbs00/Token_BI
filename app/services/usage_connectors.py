@@ -121,6 +121,22 @@ def default_codex_auth_paths() -> list[Path]:
     return paths
 
 
+def resolve_codex_binary(configured: str = "codex") -> Optional[str]:
+    resolved = shutil.which(configured)
+    if resolved or configured != "codex":
+        return resolved
+    # Finder-launched apps do not inherit the user's interactive shell PATH.
+    for candidate in (
+        Path("/opt/homebrew/bin/codex"), Path("/usr/local/bin/codex"),
+        Path.home() / ".local/bin/codex",
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
+        Path.home() / "Applications/Codex.app/Contents/Resources/codex",
+    ):
+        if resolved := shutil.which(str(candidate)):
+            return resolved
+    return None
+
+
 class CodexOAuthConnector:
     name = "codex_oauth"
     source_type = "oauth"
@@ -143,6 +159,11 @@ class CodexOAuthConnector:
         except ScraperUnavailableError:
             return False
         return not self._token_expired(access_token)
+
+    def local_identity(self) -> Optional[tuple[str, str]]:
+        access_token, id_token = self._read_auth_tokens()
+        email = self._extract_email(id_token) or self._extract_email(access_token)
+        return (mask_identity(email), identity_key(email)) if email else None
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
         access_token, id_token = self._read_auth_tokens()
@@ -181,10 +202,13 @@ class CodexOAuthConnector:
                 continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError, UnicodeError):
                 unreadable_paths.append(path)
                 continue
 
+            if not isinstance(payload, dict):
+                unreadable_paths.append(path)
+                continue
             tokens = payload.get("tokens")
             if not isinstance(tokens, dict):
                 continue
@@ -299,7 +323,7 @@ class CodexCliRpcConnector:
         self._timeout_seconds = timeout_seconds
 
     def cli_available(self) -> bool:
-        return self._rpc_client is not None or shutil.which(self._codex_bin) is not None
+        return self._rpc_client is not None or resolve_codex_binary(self._codex_bin) is not None
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
         if not self.cli_available():
@@ -341,16 +365,21 @@ class CodexCliRpcConnector:
         deadline = deadline if deadline is not None else time.monotonic() + self._timeout_seconds
         if time.monotonic() >= deadline:
             raise ConnectorTimeoutError("Codex CLI 采集超时。")
-        if shutil.which(self._codex_bin) is None:
+        executable = resolve_codex_binary(self._codex_bin)
+        if executable is None:
             raise ConnectorNotApplicableError("Codex CLI is not installed.")
 
         try:
             process = subprocess.Popen(
-                [self._codex_bin, "app-server", "--listen", "stdio://"],
+                [executable, "app-server", "--listen", "stdio://"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env={**os.environ, "PATH": os.pathsep.join(dict.fromkeys([
+                    str(Path(executable).parent), "/opt/homebrew/bin", "/usr/local/bin",
+                    os.environ.get("PATH", os.defpath),
+                ]))},
             )
         except OSError as exc:
             raise ScraperUnavailableError("Codex app-server is not available.") from exc
@@ -532,6 +561,15 @@ class UsageConnectorManager:
     def connectors(self) -> list[UsageConnector]:
         return list(self._connectors)
 
+    def local_identity(self) -> Optional[tuple[str, str]]:
+        for connector in self._connectors:
+            if isinstance(connector, CodexOAuthConnector):
+                try:
+                    return connector.local_identity()
+                except ScraperUnavailableError:
+                    return None
+        return None
+
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
         failures: list[ConnectorFailure] = []
         for connector in self._connectors:
@@ -593,11 +631,18 @@ class UsageConnectorManager:
 
     def _select_primary_failure(self, failures: list[ConnectorFailure]) -> ConnectorFailure:
         primary_names = {"codex_oauth", "codex_cli_rpc"}
-        primary_failures = [item for item in failures if item.connector_name in primary_names]
+        primary_failures = [
+            item for item in failures
+            if item.connector_name in primary_names
+            and item.category != ConnectorFailureCategory.NOT_APPLICABLE
+        ]
         candidates = primary_failures or [
             item
             for item in failures
-            if item.category != ConnectorFailureCategory.WEB_SESSION_INACTIVE
+            if item.category not in {
+                ConnectorFailureCategory.WEB_SESSION_INACTIVE,
+                ConnectorFailureCategory.NOT_APPLICABLE,
+            }
         ]
         candidates = candidates or failures
 

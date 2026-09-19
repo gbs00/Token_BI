@@ -78,8 +78,22 @@ class UsageService:
         return payload
 
     def commit_dashboard(self, payload: DashboardPayload, revision: int) -> DashboardPayload:
-        account = self._account_service.commit_synced_account(payload.account, revision)
+        account = self._account_service.commit_synced_account(
+            payload.account, revision, validated=payload.state == PageState.READY,
+        )
         return payload.model_copy(update={"account": account}) if account else self.empty_dashboard()
+
+    def pending_local_identity(self, account_id: Optional[str] = None) -> Optional[AccountRecord]:
+        identity = self._connector_manager.local_identity()
+        if identity is None:
+            return None
+        account = self._resolve_account(account_id) or self._bootstrap_account()
+        masked_email, key = identity
+        if account.identity_key == key and account.masked_email == masked_email:
+            return None
+        return account.model_copy(update={
+            "masked_email": masked_email, "account_alias": masked_email, "identity_key": key,
+        })
 
     def access_state(self) -> tuple[bool, int]:
         return self._account_service.access_state()

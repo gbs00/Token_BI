@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -299,7 +298,10 @@ def diagnostics(request: Request) -> dict:
         and hasattr(oauth_connector, "auth_available")
         and oauth_connector.auth_available()
     )
-    codex_cli_available = shutil.which(container.settings.codex_cli_bin) is not None
+    codex_cli_available = any(
+        connector.name == "codex_cli_rpc" and connector.cli_available()
+        for connector in container.usage_connector_manager.connectors
+    )
     last_connector_error = "No connector errors recorded."
     if container.usage_connector_manager.last_connector_errors:
         last_connector_error = "；".join(

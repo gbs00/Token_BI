@@ -158,11 +158,13 @@ def test_backend_outage_preserves_only_connected_account_snapshot(panel, access_
     assert panel.locator(".metric").count() == (1 if access_enabled else 0)
 
 
-def test_stopped_backend_has_restart_action(panel):
-    panel.add_init_script("window.payload={running:false,healthy:false}")
+@pytest.mark.parametrize("running", [True, False])
+def test_unhealthy_backend_has_restart_action(panel, running):
+    panel.add_init_script(f"window.payload={{running:{str(running).lower()},healthy:false}}")
     panel.goto("http://tokenbi.test/index.html")
     panel.locator('[data-action="retry"]').click()
     assert panel.evaluate("calls.some(c=>c[1]==='retry_start')")
+    assert not panel.evaluate("calls.some(c=>c[1]==='refresh')")
 
 
 @pytest.mark.parametrize("width,height", [(311,600),(308,480),(311,400)])

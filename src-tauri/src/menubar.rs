@@ -184,10 +184,22 @@ pub fn run() {
             {
                 api.prevent_exit()
             }
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            tauri::RunEvent::ExitRequested { api, .. } => {
                 let state = app.state::<DesktopState>();
-                stop_app_services_once(&state.child, &state.shutdown);
-                app.state::<updates::Updates>().discard_package();
+                if let Err(error) = stop_app_services_once(&state.child, &state.shutdown) {
+                    api.prevent_exit();
+                    state.shutdown.store(false, Ordering::SeqCst);
+                    *state.bootstrap.lock().unwrap() = json!({"phase": "error", "message": error});
+                    show_panel(app);
+                } else {
+                    app.state::<updates::Updates>().discard_package();
+                }
+            }
+            tauri::RunEvent::Exit => {
+                let state = app.state::<DesktopState>();
+                if let Err(error) = stop_app_services_once(&state.child, &state.shutdown) {
+                    eprintln!("Token BI shutdown: {error}");
+                }
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => show_panel(app),
@@ -232,7 +244,9 @@ fn launch_services(app: &tauri::AppHandle) {
             }
         });
         if state.shutdown.load(Ordering::SeqCst) {
-            stop_started_services(&state.child);
+            if let Err(error) = stop_started_services(&state.child) {
+                eprintln!("Token BI shutdown: {error}");
+            }
             return;
         }
         *state.bootstrap.lock().unwrap() = match result {
