@@ -184,6 +184,7 @@ class UsageService:
                 is_estimated=bool(normalized_payload.get("is_estimated", False)),
             ),
             metrics=metrics,
+            reset_credits=normalized_payload.get("reset_credits"),
             detail_links=self._detail_links(),
         )
 

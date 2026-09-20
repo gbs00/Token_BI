@@ -4,7 +4,7 @@
 
 当前 App 使用菜单栏面板，安装后点击菜单栏 Token BI 图标；服务自动启动，不必寻找旧版“开启服务”按钮。使用“扫码连接副屏”连接同一局域网的手机或平板，固定 `.local` 不可达时切换 LAN 入口。隐藏面板继续同步，退出 App 才停止本实例启动的后台。
 
-下方旧控制台步骤保留为历史与开发排障参考。当前版本安装限制见 [1.2.0 发布说明](docs/RELEASE_NOTES_v1.2.0.md)，开发和打包见 [发布指南](docs/RELEASE.md)。
+2026-09-21 已移除旧 HTTP 控制台及打开脚本。下方其余早期部署描述仅供历史参考；正式入口是菜单栏。当前版本安装限制与打包步骤见 [发布指南](docs/RELEASE.md)，清理策略见 [工程精简纪要](docs/MAINTENANCE_2026-09-21.md)。
 
 本文件用于说明两类场景：
 
@@ -25,10 +25,10 @@
 - [README.md](/Users/gbs00/我的文件夹/Projects/Token_BI/README.md)：需求与产品约束
 - [TECH_ARCHITECTURE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/TECH_ARCHITECTURE.md)：技术架构说明
 - [CHANGELOG.md](/Users/gbs00/我的文件夹/Projects/Token_BI/CHANGELOG.md)：版本记录与关键决策演进
-- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target.noindex/release/bundle/macos/Token BI.app>)：Mac App 原型入口，双击后打开内嵌控制台
+- [Token BI.app](</Users/gbs00/我的文件夹/Projects/Token_BI/src-tauri/target.noindex/release/bundle/macos/Token BI.app>)：Mac 菜单栏 App
 - [docs/RELEASE.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/RELEASE.md)：DMG、本地 release、签名、公证和 GitHub updater 发布说明
 - [config/accounts.json](/Users/gbs00/我的文件夹/Projects/Token_BI/config/accounts.json)：账号配置
-- [scripts/open_control_panel.command](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.command>)：Mac 本地控制台入口，双击即可启动控制页
+- [scripts/start_control_panel.sh](scripts/start_control_panel.sh)：开发排障用本地管理 API，不提供浏览器控制页面
 - [scripts/start_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/start_server.sh>)：启动 Token BI 主服务
 - [scripts/stop_server.sh](</Users/gbs00/我的文件夹/Projects/Token_BI/scripts/stop_server.sh>)：停止 Token BI 主服务
 - `runtime/contexts/`：每个账号的浏览器 profile 目录
@@ -222,37 +222,9 @@ App 会自动：
 - 生成正式 GitHub Releases updater manifest
 - 用真实干净机器验证从 DMG 拖拽安装到 `/Applications`
 
-### 3.2 备用方式：打开 Mac 本地控制台
+### 3.2 开发排障：本地管理 API
 
-如果暂时不使用 App，也可以打开控制台脚本：
-
-```bash
-/Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
-```
-
-也可以在 Finder 中双击：
-
-```text
-scripts/open_control_panel.command
-```
-
-控制台会打开：
-
-```text
-http://127.0.0.1:8790/
-```
-
-控制台能力：
-
-- 通过一个按钮开启或关闭 Token BI 主服务
-- 登录账号 / 退出账号，统一由一个账号主按钮按状态切换
-- 打开看板
-- 点击后弹窗显示 `扫码连接副屏` 二维码
-- 刷新状态并触发一次 usage 校验
-- 查看运行状态、PID、账号、固定入口、局域网入口和日志尾部
-- 查看首次启动 checklist 和可执行异常提示
-
-控制台仅监听 `127.0.0.1`，只用于 Mac 本机操作。
+正式使用请启动 Token BI.app；开发环境可运行 `scripts/start_control_panel.sh`，通过 `http://127.0.0.1:8790/api/app/health` 或 `/api/status` 检查服务。管理 API 仅监听回环地址，根路径不再提供旧控制台。不要与已安装 App 同时启动相同端口的开发服务。
 
 ### 3.3 备用方式：命令行启动
 
@@ -463,27 +435,16 @@ http://10.124.4.70:8787/dashboard
 src-tauri/target.noindex/release/bundle/macos/Token BI.app
 ```
 
-如果只是临时调试，也可以继续使用控制台脚本。
+临时调试可使用 `npm run app:dev`，界面原型预览使用 `npm run desktop:preview`。
 
-### 6.2 打开控制台备用入口
+### 6.2 打开菜单栏入口
 
-双击：
+点击 Mac 菜单栏 Token BI 图标，查看额度或进入设置；切换到其他窗口后自动收起。
 
-```text
-scripts/open_control_panel.command
-```
+### 6.3 常用操作
 
-或命令行：
+服务随 App 自动启动，退出 App 时停止；菜单栏面板提供：
 
-```bash
-/Users/gbs00/我的文件夹/Projects/Token_BI/scripts/open_control_panel.sh
-```
-
-### 6.3 启动或停止主服务
-
-在控制台点击：
-
-- `开启服务` / `关闭服务`
 - `登录账号` / `退出账号`
 - `打开看板`
 - `扫码连接副屏`

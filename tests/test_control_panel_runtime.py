@@ -257,18 +257,6 @@ def test_invalid_interface_addresses_are_not_published(monkeypatch) -> None:
     assert control_panel._interface_ipv4("en0") == ""
 
 
-def test_account_action_button_label_is_state_driven() -> None:
-    assert control_panel._account_action_label(None) == "登录账号"
-    assert control_panel._account_action_label({"status": "pending"}) == "登录账号"
-    assert control_panel._account_action_label({"status": "expired"}) == "登录账号"
-    assert control_panel._account_action_label({"status": "active"}) == "退出账号"
-
-
-def test_service_action_button_label_is_state_driven() -> None:
-    assert control_panel._service_action_label(False) == "开启服务"
-    assert control_panel._service_action_label(True) == "关闭服务"
-
-
 def test_error_payload_maps_known_failures_to_next_steps() -> None:
     payload = control_panel._error_payload("login_required")
 
@@ -347,7 +335,7 @@ def test_status_payload_prefers_main_service_account(monkeypatch) -> None:
 
     assert payload["account"]["account_id"] == "acc_real"
     assert payload["account"]["masked_email"] == "tim****@gmail.com"
-    assert payload["account_action_label"] == "退出账号"
+    assert payload["account"]["status"] == "active"
 
 
 def test_status_payload_uses_actual_last_successful_source_and_time(monkeypatch) -> None:
@@ -432,62 +420,6 @@ def test_manual_refresh_never_claims_success_without_metrics(monkeypatch) -> Non
     assert control_panel._refresh_live_accounts()["ok"] is False
 
 
-def test_control_panel_uses_single_service_button_and_hidden_qr_modal() -> None:
-    assert 'id="serviceActionBtn"' in control_panel.HTML
-    assert 'id="startBtn"' not in control_panel.HTML
-    assert 'id="stopBtn"' not in control_panel.HTML
-    assert 'id="pairModal" class="modal-backdrop hidden"' in control_panel.HTML
-    assert 'data-close="pairModal"' in control_panel.HTML
-
-
-def test_control_panel_uses_latest_console_layout() -> None:
-    assert 'class="app-shell"' in control_panel.HTML
-    assert 'class="topnav"' in control_panel.HTML
-    assert 'class="summary-grid"' in control_panel.HTML
-    assert 'class="main-grid"' in control_panel.HTML
-    assert 'class="card panel action-panel"' in control_panel.HTML
-    assert 'class="bottom-grid"' in control_panel.HTML
-    assert 'class="service-list"' in control_panel.HTML
-    assert "本机隐私说明" not in control_panel.HTML
-
-
-def test_control_panel_keeps_confirmed_v102_actions_only() -> None:
-    assert "快捷操作" in control_panel.HTML
-    assert 'id="openDashboardBtn"' in control_panel.HTML
-    assert "打开看板" in control_panel.HTML
-    assert 'id="pairDeviceBtn"' in control_panel.HTML
-    assert "扫码连接副屏" in control_panel.HTML
-    assert 'id="refreshBtn"' in control_panel.HTML
-    assert "刷新状态" in control_panel.HTML
-    assert "清理残留" not in control_panel.HTML
-    assert "打开日志" not in control_panel.HTML
-    assert "首次启动引导" not in control_panel.HTML
-
-
-def test_control_panel_primary_action_matches_account_state() -> None:
-    assert 'primaryAction = hasActiveAccount ? "dashboard" : "account"' in control_panel.HTML
-    assert 'primaryAction === "account"' in control_panel.HTML
-    assert 'hasActiveAccount ? "打开看板" : "登录账号"' in control_panel.HTML
-    assert 'payload.account_action_label || "登录账号"' in control_panel.HTML
-
-
-def test_control_panel_latest_ui_keeps_real_dialog_actions() -> None:
-    assert 'id="logsModal" class="modal-backdrop hidden"' in control_panel.HTML
-    assert 'id="accountModal" class="modal-backdrop hidden"' in control_panel.HTML
-    assert 'id="loginModal" class="modal-backdrop hidden"' in control_panel.HTML
-    assert 'id="confirmLogoutButton"' in control_panel.HTML
-    assert 'id="confirmLoginButton"' in control_panel.HTML
-    assert 'id="toast"' in control_panel.HTML
-    assert 'postAction("/api/account-action"' in control_panel.HTML
-
-
-def test_control_panel_does_not_fake_oauth_or_sync_time() -> None:
-    assert "dataSourceValue.textContent = payload.account ? 'OAuth'" not in control_panel.HTML
-    assert "lastRefreshValue.textContent = now.toLocaleTimeString" not in control_panel.HTML
-    assert "sourceLabel(usage.source_type)" in control_panel.HTML
-    assert "formatSyncTime(usage && usage.updated_at)" in control_panel.HTML
-
-
 def test_status_reports_unhealthy_when_process_exists_but_api_fails(monkeypatch):
     def unavailable():
         raise RuntimeError("not responding")
@@ -507,14 +439,32 @@ def test_status_reports_unhealthy_when_process_exists_but_api_fails(monkeypatch)
     assert "未响应" in payload["health_error"]
 
 
-def test_console_rejects_cross_site_control_actions(monkeypatch):
-    calls = []
-    monkeypatch.setattr(control_panel, "_account_action_flow", lambda: calls.append("account") or {"ok": True})
+def test_retired_console_routes_are_not_served(monkeypatch):
+    monkeypatch.setattr(control_panel, "_app_health_payload", lambda: {"service": "token-bi-control-panel"})
     server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        url = f"http://127.0.0.1:{server.server_port}/api/account-action"
+        with httpx.Client(base_url=f"http://127.0.0.1:{server.server_port}", trust_env=False) as client:
+            for path in ("/", "/api/qrcode"):
+                assert client.get(path).status_code == 404
+            for path in ("/api/service-action", "/api/account-action", "/api/stop", "/api/open-dashboard", "/api/clear-log"):
+                assert client.post(path).status_code == 404
+            assert client.get("/api/app/health").json()["service"] == "token-bi-control-panel"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(1)
+
+
+def test_console_rejects_cross_site_control_actions(monkeypatch):
+    calls = []
+    monkeypatch.setattr(control_panel, "_login_account_flow", lambda: calls.append("account") or {"ok": True})
+    server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/add-account"
         with httpx.Client(trust_env=False) as client:
             assert client.post(url, headers={"Origin": "https://untrusted.example"}).status_code == 403
             assert client.post(url, headers={"Host": "untrusted.example"}).status_code == 403

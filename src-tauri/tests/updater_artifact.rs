@@ -18,10 +18,14 @@ fn signed_release_download_install_and_tamper_rejection() {
     let config: Value =
         serde_json::from_slice(&std::fs::read(root.join("src-tauri/tauri.conf.json")).unwrap())
             .unwrap();
-    let staged = root.join(format!(
-        "dist/release-v{}",
-        config["version"].as_str().unwrap()
-    ));
+    let staged = std::env::var_os("TOKEN_BI_TEST_RELEASE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            root.join(format!(
+                "dist/release-v{}",
+                config["version"].as_str().unwrap()
+            ))
+        });
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(staged.join("latest.json")).unwrap()).unwrap();
     let filename = manifest["platforms"]["darwin-aarch64"]["url"]
@@ -113,6 +117,17 @@ fn signed_release_download_install_and_tamper_rejection() {
     });
     server.join().unwrap();
     assert!(std::fs::metadata(&exe).unwrap().len() > 1000);
+    let canonical_app = app_path.canonicalize().unwrap();
+    for runtime in ["token-bi-control", "token-bi-backend"] {
+        let alias = app_path.join(format!(
+            "Contents/Resources/{runtime}-runtime/_internal/Python3"
+        ));
+        assert!(std::fs::symlink_metadata(&alias)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(alias.canonicalize().unwrap().starts_with(&canonical_app));
+    }
     assert!(std::process::Command::new("codesign")
         .args(["--verify", "--deep", "--strict"])
         .arg(&app_path)

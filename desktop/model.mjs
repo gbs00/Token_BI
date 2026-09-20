@@ -22,6 +22,22 @@ export function lastSuccess(summary = {}, now = Date.now()) {
   const minutes = Math.max(0, Math.floor((now - target) / 60000));
   return minutes < 1 ? '刚刚更新' : minutes < 60 ? `${minutes} 分钟前更新` : `${new Date(target).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 更新`;
 }
+export function storedResets(credits, now = Date.now()) {
+  if (!Number.isSafeInteger(credits?.available_count) || credits.available_count < 0) return null;
+  const dates = (Array.isArray(credits.expires_at) ? credits.expires_at : [])
+    .map(value => Date.parse(value)).filter(Number.isFinite).sort((a, b) => a - b).slice(0, credits.available_count);
+  const expired = dates.filter(date => date <= now).length;
+  return {
+    count: Math.max(0, credits.available_count - expired),
+    unknown: Math.max(0, credits.available_count - dates.length),
+    expirations: dates.filter(date => date > now).map(date => {
+      const minutes = Math.floor((date - now) / 60000);
+      const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
+      const label = minutes < 1 ? '不足 1m' : [days && `${days}d`, hours && `${hours}h`, !days && minutes % 60 && `${minutes % 60}m`].filter(Boolean).join(' ');
+      return { at: new Date(date).toISOString(), label };
+    }),
+  };
+}
 export const sources = { oauth: 'OAuth', cli_rpc: 'CLI RPC', web_session: 'Web Session', dom_fallback: 'Web 页面兼容', local_snapshot: '本地测试数据' };
 export function updateModel(update = {}) {
   const phase = update.phase || 'idle', version = update.version || '';
@@ -52,6 +68,7 @@ export function viewModel(status) {
   return {
     account,
     metrics: allowed ? visibleMetrics(payload?.metrics) : [],
+    resetCredits: allowed && account ? payload?.reset_credits : null,
     summary: payload?.summary || {},
     state: payload?.state || 'empty',
     message: payload?.message || '',

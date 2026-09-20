@@ -36,6 +36,12 @@ class DetailLink(BaseModel):
     requires_same_account_login: bool = True
 
 
+class ResetCredits(BaseModel):
+    available_count: int = Field(ge=0)
+    # None means details were not returned; individual None values mean unknown expiry.
+    expires_at: Optional[list[Optional[datetime]]] = None
+
+
 class DashboardSummary(BaseModel):
     updated_at: Optional[datetime] = None
     last_attempt_at: Optional[datetime] = None
@@ -53,4 +59,5 @@ class DashboardPayload(BaseModel):
     message: Optional[str] = None
     summary: DashboardSummary = Field(default_factory=DashboardSummary)
     metrics: list[MetricCard] = Field(default_factory=list)
+    reset_credits: Optional[ResetCredits] = None
     detail_links: list[DetailLink] = Field(default_factory=list)

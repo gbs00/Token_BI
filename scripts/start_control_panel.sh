@@ -12,7 +12,7 @@ CONTROL_PORT="${TOKEN_BI_CONTROL_PORT:-8790}"
 PID_FILE="$APP_DATA_DIR/runtime/control_panel.pid"
 LOG_DIR="$APP_DATA_DIR/runtime/logs"
 LOG_FILE="$LOG_DIR/control_panel.log"
-CONTROL_URL="http://$CONTROL_HOST:$CONTROL_PORT/"
+CONTROL_URL="http://$CONTROL_HOST:$CONTROL_PORT/api/app/health"
 
 mkdir -p "$LOG_DIR"
 

@@ -18,12 +18,6 @@ class SessionService:
         context_dir.mkdir(parents=True, exist_ok=True)
         return context_dir
 
-    def context_has_material(self, account_id: str) -> bool:
-        context_dir = self.context_dir(account_id)
-        if not context_dir.exists() or not context_dir.is_dir():
-            return False
-        return any(context_dir.iterdir())
-
     def delete_context(self, account_id: str) -> None:
         context_dir = self.context_dir(account_id)
         if context_dir.exists():

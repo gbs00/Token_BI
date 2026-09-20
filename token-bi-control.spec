@@ -9,7 +9,7 @@ a = Analysis(
     ["scripts/control_cli.py"],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[(str(project_root / "scripts" / "control_panel.html"), "scripts")],
+    datas=[],
     hiddenimports=["qrcode.image.svg"],
     hookspath=[],
     hooksconfig={},

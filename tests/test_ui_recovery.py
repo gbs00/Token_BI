@@ -23,13 +23,9 @@ def page(app):
                 route.abort()
                 return
             path = urlsplit(route.request.url).path
-            if path == "/console":
-                text = (Path(__file__).resolve().parents[1] / "scripts/control_panel.html").read_text(encoding="utf-8")
-                route.fulfill(body=text, content_type="text/html")
-            else:
-                response = client.get(path)
-                route.fulfill(body=response.content, status=response.status_code,
-                              content_type=response.headers.get("content-type", "text/plain"))
+            response = client.get(path)
+            route.fulfill(body=response.content, status=response.status_code,
+                          content_type=response.headers.get("content-type", "text/plain"))
         page.route("**/*", serve)
         page.clock.install()
         yield page
@@ -89,20 +85,3 @@ def test_manual_sync_discards_older_poll_response(page):
     page.wait_for_function("document.querySelector('[data-metric-percent]').textContent === '51%'")
     page.evaluate("window.finishOld()")
     assert page.locator("[data-metric-percent]").inner_text() == "51%"
-
-
-@pytest.mark.parametrize("healthy,state", [(True, "stale"), (True, "reauth_required"), (True, "rate_limited"), (False, "ready")])
-def test_console_distinguishes_service_health_and_quota_freshness(page, healthy, state):
-    payload = {
-        "running": True, "healthy": healthy,
-        "health_error": "主服务未响应" if not healthy else None,
-        "account_action_label": "退出账号", "account": {"status": "active", "masked_email": "user****@example.com"},
-        "usage": {"state": state, "has_data": True, "source_type": "oauth", "message": "同步失败，保留上次数据"},
-    }
-    page.add_init_script("window.fetch = () => Promise.resolve(new Response(JSON.stringify(%s)));" % json.dumps(payload))
-    page.goto("http://tokenbi.test/console")
-    assert page.locator("#sourceBadge").inner_text() != "已连接"
-    assert page.locator("#lastRefreshState").inner_text() != "官方额度已同步"
-    assert "局域网内可访问" not in page.locator("#dashboardState").inner_text()
-    if not healthy:
-        assert "未响应" in page.locator("#serverState").inner_text()

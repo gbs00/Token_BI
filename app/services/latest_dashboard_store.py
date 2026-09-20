@@ -15,6 +15,7 @@ from app.models.usage_snapshot import (
     DetailLink,
     MetricCard,
     PageState,
+    ResetCredits,
 )
 from app.services.usage_connectors import mask_identity
 
@@ -52,11 +53,16 @@ class LatestDashboardStore:
                         or raw.get("account_identity_key") != account.identity_key):
                     self._clear_unlocked()
                     return None
+                try:
+                    resets = ResetCredits.model_validate(raw["reset_credits"]) if raw.get("reset_credits") is not None else None
+                except ValidationError:
+                    resets = None
                 return DashboardPayload(
                     account=account,
                     state=PageState.READY,
                     summary=DashboardSummary.model_validate(raw.get("summary") or {}),
                     metrics=[MetricCard.model_validate(item) for item in raw.get("metrics") or []],
+                    reset_credits=resets,
                     detail_links=[
                         DetailLink.model_validate(item) for item in raw.get("detail_links") or []
                     ],
@@ -75,6 +81,7 @@ class LatestDashboardStore:
             "account_identity_key": payload.account.identity_key,
             "summary": payload.summary.model_dump(mode="json"),
             "metrics": [metric.model_dump(mode="json") for metric in payload.metrics],
+            "reset_credits": payload.reset_credits.model_dump(mode="json") if payload.reset_credits else None,
             "detail_links": [link.model_dump(mode="json") for link in payload.detail_links],
         }
         encoded = json.dumps(stored, ensure_ascii=False, indent=2) + "\n"

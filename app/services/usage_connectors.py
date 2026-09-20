@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Protocol
+from urllib.parse import urljoin
 import httpx
 
 from app import __version__
@@ -180,6 +181,19 @@ class CodexOAuthConnector:
             source_type=self.source_type,
             source_detail="oauth_usage_api",
         )
+        resets = normalized.get("reset_credits")
+        if resets and resets["available_count"] > 0 and resets["expires_at"] is None:
+            # Optional metadata shares this token and the existing background sync, never CLI.
+            try:
+                details = self._http_get(
+                    urljoin(self._usage_url, "rate-limit-reset-credits"),
+                    headers, min(2.0, self._timeout_seconds),
+                )
+                detailed_resets = _normalize_reset_credits(details)
+                if detailed_resets is not None:
+                    normalized["reset_credits"] = detailed_resets
+            except (ScraperUnavailableError, OSError, ValueError, TypeError):
+                pass  # A missing/slow reset endpoint must not fail valid quota data.
         account_identity = self._extract_account_identity(id_token) or self._extract_account_identity(
             access_token
         )
@@ -698,7 +712,44 @@ def normalize_usage_payload(payload: dict, source_type: str, source_detail: str)
         normalized["account_masked_email"] = account_identity.strip()
     if isinstance(payload.get("account_identity_key"), str):
         normalized["account_identity_key"] = payload["account_identity_key"]
+    normalized["reset_credits"] = _normalize_reset_credits(
+        _first_present(payload, ("rate_limit_reset_credits", "rateLimitResetCredits"))
+    )
     return normalized
+
+
+def _normalize_reset_credits(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    count = _first_present(raw, ("available_count", "availableCount"))
+    if type(count) is not int or count < 0:
+        return None
+    expirations = None
+    if count == 0:
+        expirations = []
+    elif isinstance(raw.get("credits"), list):
+        expirations, seen = [], set()
+        for row in raw["credits"]:
+            if not isinstance(row, dict) or row.get("status") != "available":
+                continue
+            if _first_present(row, ("reset_type", "resetType")) not in ("codex_rate_limits", "codexRateLimits"):
+                continue
+            credit_id = row.get("id")
+            if not isinstance(credit_id, str) or not credit_id or credit_id in seen:
+                continue
+            seen.add(credit_id)
+            try:
+                raw_expiry = _first_present(row, ("expires_at", "expiresAt"))
+                expiry = None if isinstance(raw_expiry, bool) else _coerce_datetime(raw_expiry)
+                if expiry is not None and expiry.tzinfo is None:
+                    expiry = None
+            except (AnalyticsPageChangedError, ValueError, TypeError):
+                expiry = None
+            expirations.append(expiry)
+        expirations.sort(key=lambda expiry: expiry.timestamp() if expiry else float("inf"))
+        expirations = expirations[:count]
+    # Preserve the authoritative count even if the upstream caps its detail rows.
+    return {"available_count": count, "expires_at": expirations}
 
 
 def _extract_windows(payload: dict, source_type: str, source_detail: str) -> list[dict]:

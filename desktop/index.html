@@ -23,6 +23,11 @@
         </div>
         <div class="notice" id="notice" role="status" hidden><img src="./assets/triangle-alert.svg" alt=""><p id="notice-text"></p><button class="text-button" data-action="retry">重试</button></div>
         <div id="metrics" class="metrics"></div>
+        <section class="reset-credits" id="reset-credits" aria-label="存储重置" hidden>
+          <h2>存储重置</h2>
+          <div class="reset-expirations" id="reset-expirations"><img src="./assets/clock-3.svg" alt="" aria-hidden="true"><div id="reset-credits-times" role="list" aria-label="各次重置到期剩余时间"></div></div>
+          <p id="reset-credits-empty" hidden>暂无可用重置</p>
+        </section>
         <div class="empty" id="empty">
           <span class="user-symbol"><img src="./assets/user-round.svg" width="40" height="40" alt=""></span>
           <h2 id="empty-title">正在连接本地服务</h2><p id="empty-copy" class="secondary"></p>

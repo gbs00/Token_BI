@@ -10,7 +10,39 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
+
+
+MAX_BUNDLE_BYTES = 195_000_000
+
+
+def verify_resources(bundle: Path) -> dict[str, int]:
+    contents = bundle.resolve() / "Contents"
+    resources = contents / "Resources"
+    for name in ("token-bi-control", "token-bi-backend"):
+        internal = resources / f"{name}-runtime" / "_internal"
+        frameworks = list(internal.glob("Python*.framework"))
+        assert len(frameworks) == 1, f"Missing or duplicate Python framework: {name}"
+        framework = frameworks[0]
+        library = framework.stem
+        aliases = (internal / library, framework / library, framework / "Versions/Current")
+        assert all(path.is_symlink() for path in aliases), f"Python aliases expanded into copies: {name}"
+        assert aliases[0].resolve() == aliases[1].resolve(), f"Python aliases disagree: {name}"
+        for path in internal.rglob("*"):
+            if path.is_symlink():
+                assert path.exists(), f"Broken runtime symlink: {path}"
+                assert internal in path.resolve().parents, f"Runtime symlink escapes bundle: {path}"
+    assert not list(resources.rglob("control_panel.html")), "Retired console must not ship"
+
+    def file_bytes(path: Path) -> int:
+        return sum(item.stat().st_size for item in path.rglob("*") if not item.is_symlink() and item.is_file())
+
+    sizes = {"total": file_bytes(contents), "native": file_bytes(contents / "MacOS"),
+             "control": file_bytes(resources / "token-bi-control-runtime"),
+             "backend": file_bytes(resources / "token-bi-backend-runtime")}
+    assert sizes["total"] <= MAX_BUNDLE_BYTES, f"App exceeds {MAX_BUNDLE_BYTES} byte budget: {sizes}"
+    return sizes
 
 
 def free_port() -> int:
@@ -20,6 +52,7 @@ def free_port() -> int:
 
 
 def verify(bundle: Path) -> None:
+    print("Bundle bytes (symlinks excluded):", json.dumps(verify_resources(bundle)))
     contents = bundle.resolve() / "Contents"
     info = plistlib.loads((contents / "Info.plist").read_bytes())
     expected = json.loads((Path(__file__).resolve().parents[1] / "package.json").read_text())["version"]
@@ -59,6 +92,12 @@ def verify(bundle: Path) -> None:
                     except OSError:
                         time.sleep(0.1)
                 assert ready, "Packaged control did not become ready"
+                try:
+                    opener.open(f"http://127.0.0.1:{control_port}/", timeout=5)
+                except HTTPError as exc:
+                    assert exc.code == 404
+                else:
+                    raise AssertionError("Retired console is still served")
                 assert request(control_port, "/api/start", "POST")["ok"]
                 status = request(control_port, "/api/status")
                 assert status["healthy"] and status["access_enabled"] is False

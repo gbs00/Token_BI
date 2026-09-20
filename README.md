@@ -1,6 +1,6 @@
 # Token BI 解决方案
 
-## 当前版本：1.2.3
+## 当前版本：1.2.4
 
 Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备副屏看板。安装后点击 Mac 菜单栏图标查看账号、剩余额度与重置时间；局域网服务自动启动，扫码即可连接副屏。隐藏面板不停止同步，退出 App 才停止本实例启动的服务。
 
@@ -9,10 +9,13 @@ Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备�
 - 首次运行通过轻提示定位菜单栏入口；切换窗口自动收起，移除固定面板模式。
 - 修复 macOS 27 升级后单击图标误弹快捷菜单：左键直接展开额度，右键保留快捷菜单。
 - 更新前确认后台完整停止；账号切换不再保留旧账号额度，修复 CLI 发现、代理干扰和失联服务重试。正常同步优先级与刷新频率不变。
+- 菜单栏新增“存储重置”，按到期顺序展示逐项倒计时，不重复显示总次数；仅只读展示，不提供兑换操作。
 - 下载：[GitHub Releases](https://github.com/gbs00/Token_BI/releases)。Apple Silicon、ad hoc 签名、未公证。1.2.1 用户可在设置中检查并确认更新；1.2.0 及更早版本需手动安装一次新版。后台发现新版本显示红点，不强制升级。
-- 开发与发布：[菜单栏实现](docs/TECH_MENUBAR.md)、[看板自适应](docs/TECH_DASHBOARD_RESPONSIVE.md)、[发布步骤](docs/RELEASE.md)、[1.2.3 说明](docs/RELEASE_NOTES_v1.2.3.md)、[更新技术纪要](docs/TECH_v1.2.1.md)。
+- 开发与发布：[菜单栏实现](docs/TECH_MENUBAR.md)、[看板自适应](docs/TECH_DASHBOARD_RESPONSIVE.md)、[发布步骤](docs/RELEASE.md)、[1.2.4 说明](docs/RELEASE_NOTES_v1.2.4.md)、[更新技术纪要](docs/TECH_v1.2.1.md)。
 - 后续规划：[Roadmap](docs/ROADMAP.md)，记录待设计和待评审需求。
 - 本次审计及回归边界：[2026-09-19 审计修复纪要](docs/REVIEW_FIXES_2026-09-19.md)。
+- 工程精简：[包体与工作区清理](docs/MAINTENANCE_2026-09-21.md)。修复运行库重复打包，退役旧 HTTP 控制台与打开脚本；管理 API、菜单栏和副屏看板保留。`npm run workspace:clean` 预览过期文件，显式追加 `-- --apply` 才执行清理。
+- 生产环境继续使用 Playwright 保留网页登录兜底；轻量 CDP 选型与重构留待后续版本。
 
 下方保留历史需求与实施记录，涉及“大控制台、服务开关、未接入更新”的旧描述不代表当前 App 的状态。
 

@@ -36,6 +36,7 @@ TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWOR
 - 菜单栏的 0/99/100%、单/双额度、QR、异常和矮屏均能使用。
 - Web 横竖屏、地址栏变化、用户缩放、离线恢复和旧浏览器回退通过；真机未覆盖项明确披露。
 - 用成套打包的 control/backend 做隔离健康与网页测试，不能只验证源码服务。
+- `verify_bundle.py` 同时检查 Python framework 链接完整且未越出运行库、旧控制台未入包，以及 App 不超过 195MB（十进制、符号链接不重复计入）的体积预算。macOS 运行库使用 `bundle.macOS.files` 保留链接；不要改回逐文件复制的 `bundle.resources`，也不要签名后修改 App。
 - DMG 可挂载、包内 App 签名有效。保留用户数据；不要把演示页、凭据、运行日志和备份 App 上传仓库。
 
 ## 手动上传
@@ -54,3 +55,7 @@ Developer ID 证书、公证凭据和 updater 私钥必须保存在仓库外，�
 Actions 工作流仍停用。启用前需由发布者配置 `TAURI_SIGNING_PRIVATE_KEY` 和对应密码 Secret，确认 arm64 runner。新流程只创建包含完整资源的草稿，验收后人工发布，避免与手动流程重复。
 
 Apple 签名/公证、Intel/Universal、干净机器安装、真实运行版本 N → N+1 重启及副屏恢复、长期常驻仍需独立验收。详见 [技术纪要](TECH_v1.2.1.md)。
+
+## 本地产物保留
+
+`npm run workspace:clean` 默认预览，核对后执行 `npm run workspace:clean -- --apply`。保留最新两份 App 备份、最近两个版本发布暂存和当前 `target.noindex`；只清理已退役的 `target` 与不再引用、无占用且至少 30 天无修改的开发浏览器配置。清理记录位于 `dist/cleanup-reports`，不随 App 发布。该命令不在用户 App 启动或更新时自动执行，也不删除远端 Release。

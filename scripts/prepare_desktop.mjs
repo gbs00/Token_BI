@@ -3,7 +3,7 @@ import { copyFile, mkdir, rm } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const assets = new URL('desktop/assets/', root);
 await mkdir(assets, { recursive: true });
-const icons = ['qr-code', 'external-link', 'refresh-cw', 'settings', 'power', 'chevron-left', 'copy', 'user-round', 'triangle-alert', 'file-text', 'download', 'check', 'arrow-up-to-line', 'x'];
+const icons = ['qr-code', 'external-link', 'refresh-cw', 'settings', 'power', 'chevron-left', 'copy', 'user-round', 'triangle-alert', 'file-text', 'download', 'check', 'arrow-up-to-line', 'x', 'clock-3'];
 for (const name of icons) {
   await copyFile(new URL(`node_modules/lucide-static/icons/${name}.svg`, root), new URL(`${name}.svg`, assets));
 }

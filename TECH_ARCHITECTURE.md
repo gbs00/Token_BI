@@ -1,6 +1,6 @@
 # Token BI 技术架构文档
 
-> 2026-09-12 未发布菜单栏重构见 [菜单栏技术纪要](docs/TECH_MENUBAR.md)，覆盖桌面入口与生命周期；下方为历史基线。
+> 当前菜单栏入口与生命周期见 [菜单栏技术纪要](docs/TECH_MENUBAR.md)。2026-09-21 已删除旧 HTTP 控制台及专属接口，见 [清理纪要](docs/MAINTENANCE_2026-09-21.md)；下方旧页面与接口描述仅为历史基线。
 
 > 当前 V1.0.0 技术设计已迁移至 [docs/TECH_ARCHITECTURE_V1.0.0.md](/Users/gbs00/我的文件夹/Projects/Token_BI/docs/TECH_ARCHITECTURE_V1.0.0.md)。
 > 本文件保留 v0.9.1 / MVP 技术基线，用于对照历史实现；后续 1.0.0 开发以版本化技术文档为准。

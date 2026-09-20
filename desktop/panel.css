@@ -37,6 +37,18 @@ h2 { font-size: 18px; font-weight: 600; }
 .bar-fill { height: 100%; border-radius: inherit; background: var(--metric-color); }
 .tier-high { --metric-color: #66d9ee; } .tier-medium { --metric-color: #4c8bfa; } .tier-low { --metric-color: #f2c75c; } .tier-critical { --metric-color: #f06f72; }
 .reset { text-align: right; color: #ccc; margin-top: 11px; font-size: 14px; line-height: 1.5; }
+.reset-credits { padding: 12px 2px 14px; border-bottom: 1px solid var(--line); }
+.reset-credits h2 { font-size: 13px; font-weight: 600; margin-bottom: 7px; }
+.reset-expirations, #reset-credits-empty { color: var(--secondary); font-size: 12px; line-height: 1.5; }
+.reset-expirations { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.reset-expirations > img { width: 13px; height: 13px; margin-top: 2px; flex: 0 0 13px; filter: invert(.72); }
+#reset-credits-times { display: flex; flex-wrap: wrap; gap: 0 5px; font-variant-numeric: tabular-nums; }
+#reset-credits-times > span { white-space: nowrap; }
+#reset-credits-times > span + span::before { content: "·"; margin-right: 5px; }
+.metrics.with-resets .metric { min-height: 96px; padding-top: 8px; padding-bottom: 8px; }
+.metrics.with-resets .bar { margin-top: 8px; }
+.metrics.with-resets .reset { margin-top: 7px; }
+.metrics.with-resets .metric:last-child { border-bottom: 0; }
 .home-actions { display: grid; gap: 8px; margin-top: 20px; }
 .primary, .secondary-button { min-height: 44px; padding: 9px 12px; border-radius: 8px; width: 100%; font-size: 15px; }
 .primary { background: var(--blue); border: 1px solid #439dfa; font-weight: 550; }

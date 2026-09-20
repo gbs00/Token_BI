@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from app.models.account import AccountRecord, AccountStatus
 from app.models.account import CreateAccountRequest
-from app.services.session_service import SessionService
 
 
 def test_create_account_persists_record(container) -> None:
@@ -35,20 +33,6 @@ def test_delete_account_removes_record_and_profile(container) -> None:
     assert deleted is not None
     assert container.account_service.get_account(account.account_id) is None
     assert context_dir.exists() is False
-
-
-def test_session_context_material_detection(test_settings) -> None:
-    service = SessionService(test_settings)
-    account_id = "acc_demo"
-    context_dir = service.ensure_context_dir(account_id)
-
-    assert service.context_has_material(account_id) is False
-
-    marker = context_dir / "Default" / "Cookies"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("cookie", encoding="utf-8")
-
-    assert service.context_has_material(account_id) is True
 
 
 def test_visible_accounts_hide_demo_and_dedupe_by_email(container) -> None:

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { visibleMetrics, tier, resetRemaining, lastSuccess, viewModel, updateModel } from '../desktop/model.mjs';
+import { visibleMetrics, tier, resetRemaining, lastSuccess, viewModel, updateModel, storedResets } from '../desktop/model.mjs';
 
 test('quota thresholds apply identically to every window, including 0 and 100', () => {
   assert.deepEqual([0,25,26,50,51,75,76,99,100].map(tier), ['critical','critical','low','low','medium','medium','high','high','high']);
@@ -31,6 +31,33 @@ test('paused access hides cached account and quota', () => {
 });
 test('authoritative empty account cannot fall back to stale console identity', () => {
   assert.equal(viewModel({account:{masked_email:'old'},dashboard:{account:null}}).account, null);
+});
+
+test('stored resets retain the count and sort individual expiry countdowns', () => {
+  const now = Date.parse('2030-01-01T00:00:00Z');
+  const dates = [20880, 506, 19320].map(minutes => new Date(now + minutes * 60000).toISOString());
+  const result = storedResets({available_count:3, expires_at:dates}, now);
+  assert.equal(result.count, 3);
+  assert.equal(result.unknown, 0);
+  assert.deepEqual(result.expirations.map(e=>e.label), ['8h 26m', '13d 10h', '14d 12h']);
+});
+test('expired resets disappear locally, unknown dates do not invent expiries', () => {
+  const now = Date.parse('2030-01-01T00:00:00Z');
+  const result = storedResets({available_count:4, expires_at:['2029-01-01T00:00:00Z', null, 'invalid', '2030-01-01T00:00:30Z']}, now);
+  assert.equal(result.count, 3);
+  assert.equal(result.unknown, 2);
+  assert.deepEqual(result.expirations.map(e=>e.label), ['不足 1m']);
+});
+test('missing reset data is not zero, and partial details never determine total count', () => {
+  for (const credits of [null, {}, {available_count:-1}, {available_count:'3'}, {available_count:true}]) assert.equal(storedResets(credits), null);
+  assert.deepEqual(storedResets({available_count:0, expires_at:[]}), {count:0,unknown:0,expirations:[]});
+  assert.deepEqual(storedResets({available_count:3, expires_at:null}), {count:3,unknown:3,expirations:[]});
+});
+test('disconnect or missing account hides reset metadata', () => {
+  const dashboard = {account:{status:'active'},reset_credits:{available_count:3}};
+  assert.equal(viewModel({access_enabled:false,dashboard}).resetCredits, null);
+  assert.equal(viewModel({dashboard:{...dashboard,account:null}}).resetCredits, null);
+  assert.equal(viewModel({dashboard}).resetCredits.available_count, 3);
 });
 
 test('every update phase maps to an explicit action and busy guard', () => {

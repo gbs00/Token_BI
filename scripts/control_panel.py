@@ -537,13 +537,6 @@ def _logout_account_flow() -> dict:
     }
 
 
-def _account_action_flow() -> dict:
-    account = _preferred_account()
-    if _account_action_label(account) == "退出账号":
-        return _logout_account_flow()
-    return _login_account_flow()
-
-
 def _refresh_live_accounts() -> dict:
     running, _ = _main_server_running()
     if not running:
@@ -604,33 +597,8 @@ def _tail_log(lines: int = 20) -> str:
     return "\n".join(content[-lines:]) if content else "No server log yet."
 
 
-def _clear_log() -> tuple[bool, str]:
-    log_file = LOG_DIR / "server.log"
-    try:
-        log_file.write_text("", encoding="utf-8")
-    except OSError as exc:
-        return False, str(exc)
-    return True, "日志已清空。"
-
-
 def _close_token_bi_chrome_workers() -> None:
     stop_owned_chrome_workers(RUNTIME_DIR / "contexts")
-
-
-def _account_action_label(account: dict | None) -> str:
-    if account and account.get("status") == "active":
-        return "退出账号"
-    return "登录账号"
-
-
-def _service_action_label(running: bool) -> str:
-    return "关闭服务" if running else "开启服务"
-
-
-def _service_action_flow() -> dict:
-    running, _ = _main_server_running()
-    ok, message = _stop_main_server_process() if running else _start_main_server_process()
-    return {"ok": ok, "message": message, "action": "stop" if running else "start"}
 
 
 ERROR_COPIES = {
@@ -691,7 +659,6 @@ def _status_payload() -> dict:
     healthy = running and runtime_status.get("service") == MAIN_SERVICE_MARKER
     account = _status_account(running, runtime_status)
     urls = _dashboard_urls()
-    account_action_label = _account_action_label(account)
     return {
         "running": running,
         "healthy": healthy,
@@ -704,8 +671,6 @@ def _status_payload() -> dict:
         "packaged": bool(getattr(sys, "frozen", False)),
         "app_data_dir": str(APP_DATA_DIR),
         "urls": urls,
-        "service_action_label": _service_action_label(running),
-        "account_action_label": account_action_label,
         "usage": runtime_status.get("usage"),
         "dashboard": runtime_status.get("dashboard"),
         "account": {
@@ -734,10 +699,6 @@ def _app_health_payload() -> dict:
     }
 
 
-CONTROL_PANEL_HTML_PATH = Path(__file__).with_name("control_panel.html")
-HTML = CONTROL_PANEL_HTML_PATH.read_text(encoding="utf-8")
-
-
 class ControlPanelHandler(BaseHTTPRequestHandler):
     def _allow_request(self) -> bool:
         try:
@@ -753,9 +714,6 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         if not self._allow_request():
             return
         parsed = urlparse(self.path)
-        if parsed.path == "/":
-            self._send_html(HTML)
-            return
         if parsed.path == "/api/status":
             self._send_json(_status_payload())
             return
@@ -773,40 +731,15 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             except RuntimeError as exc:
                 self._send_json({"ok": False, "message": str(exc)})
             return
-        if parsed.path == "/api/qrcode":
-            kind = parse_qs(parsed.query).get("kind", ["fixed"])[0]
-            urls = _dashboard_urls()
-            target = urls.get(kind) or ""
-            if not target:
-                self.send_error(HTTPStatus.NOT_FOUND, "Dashboard URL unavailable")
-                return
-            try:
-                self._send_svg(_qrcode_svg(target))
-            except RuntimeError as exc:
-                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
-            return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
         if not self._allow_request():
             return
         parsed = urlparse(self.path)
-        if parsed.path == "/api/service-action":
-            self._send_json(_service_action_flow())
-            return
         if parsed.path == "/api/start":
             ok, message = _start_main_server_process()
             self._send_json({"ok": ok, "message": message})
-            return
-        if parsed.path == "/api/stop":
-            ok, message = _stop_main_server_process()
-            self._send_json({"ok": ok, "message": message})
-            return
-        if parsed.path == "/api/open-dashboard":
-            urls = _dashboard_urls()
-            target = urls["fixed"] or urls["local"]
-            code, output = _open_url(target)
-            self._send_json({"ok": code == 0, "message": output, "url": target})
             return
         if parsed.path == "/api/open-url":
             kind = parse_qs(parsed.query).get("kind", [""])[0]
@@ -818,9 +751,6 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             code, output = _open_url(target)
             self._send_json({"ok": code == 0, "message": output, "url": target})
             return
-        if parsed.path == "/api/account-action":
-            self._send_json(_account_action_flow())
-            return
         if parsed.path == "/api/add-account":
             self._send_json(_login_account_flow())
             return
@@ -830,10 +760,6 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/refresh-status":
             _invalidate_dashboard_url_cache()
             self._send_json(_refresh_live_accounts())
-            return
-        if parsed.path == "/api/clear-log":
-            ok, message = _clear_log()
-            self._send_json({"ok": ok, "message": message})
             return
         if parsed.path == "/api/app/shutdown":
             expected_pid = self.headers.get("X-Token-BI-Control-Pid")
@@ -858,27 +784,10 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
 
-    def _send_html(self, body: str) -> None:
-        content = body.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
     def _send_json(self, payload: dict) -> None:
         content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
-    def _send_svg(self, body: str) -> None:
-        content = body.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)

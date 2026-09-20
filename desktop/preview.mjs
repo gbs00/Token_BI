@@ -8,6 +8,7 @@ export function createPreview(scenario) {
     return {running:true, healthy:true, account, access_enabled:signedIn, urls, log_tail:'Local preview. No services started.', dashboard:{
       account, state:signedIn ? failed ? 'stale' : 'ready' : 'empty', message:failed ? '同步失败：网络连接超时。' : '',
       summary:{source_type:'oauth', last_success_at:new Date(now - (failed ? 720000 : 0)).toISOString()},
+      reset_credits:signedIn ? {available_count:3, expires_at:[506, 19320, 20880].map(minutes => new Date(now + minutes * 60000 + 59000).toISOString())} : null,
       metrics:signedIn ? [{metric_type:'session',label:'5h 额度', remaining_pct:82,reset_at:new Date(now+13080000+59000).toISOString()},
         {metric_type:'weekly',label:'周额度',remaining_pct:44,reset_at:new Date(now+291600000+59000).toISOString()}] : [],
     }};
