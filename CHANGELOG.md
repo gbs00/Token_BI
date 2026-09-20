@@ -14,6 +14,7 @@
 - Playwright 网页登录兜底保持不变，CDP 评估选型与重构明确放入后续版本。
 - 发布前全量回归通过：Python/浏览器 425 项、JS 13 项、Rust 19 项与真实签名更新归档 1 项；真实 OAuth 只读校验、打包服务启停、App/DMG 签名及挂载通过。App 实测 188,708,434 字节，DMG 63,015,817 字节；不自动覆盖本机安装。
 - [发布说明](docs/RELEASE_NOTES_v1.2.4.md)、[存储重置实现与历史验收](docs/TECH_RESET_CREDITS.md)、[包体与工作区精简](docs/MAINTENANCE_2026-09-21.md)。
+- 已于 2026-09-21 00:32:37（北京时间）[正式发布](https://github.com/gbs00/Token_BI/releases/tag/v1.2.4)，五个附件摘要与公开更新清单均已核验；详见 [发布回执](docs/releases/v1.2.4-verification.md)。
 
 ## v1.2.3 - 代码审计与稳定性修复
 
