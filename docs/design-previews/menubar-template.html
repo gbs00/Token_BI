@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token BI · 双层额度环</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #171717; background: #fff; font: 15px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0; }
+    main { width: min(100%, 1024px); margin: auto; padding: 36px 48px; }
+    h1 { margin: 0; font-size: 28px; font-weight: 650; }
+    p { margin: 6px 0 0; color: #666; }
+    .enlarged { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; margin: 32px 0; }
+    figure { display: grid; place-items: center; min-height: 240px; margin: 0; }
+    .glyph { display: block; flex: none; width: 18px; height: 18px; object-fit: contain; filter: brightness(0); }
+    .large { width: 160px; height: 160px; }
+    .dark .glyph, .selected .glyph { filter: brightness(0) invert(1); }
+    .dark { color: #fff; background: #252525; }
+    h2 { margin: 20px 0 10px; font-size: 15px; font-weight: 600; }
+    .bar { display: flex; align-items: center; justify-content: flex-end; gap: 14px; height: 28px; padding: 0 14px; color: #171717; background: #eee; }
+    .bar.dark { color: #fff; background: #252525; }
+    .bar.selected { color: #fff; background: #006bd6; }
+    .system { display: block; width: 18px; height: 18px; }
+    .battery { width: 24px; }
+    .dark .system, .selected .system { filter: brightness(0) invert(1); }
+    .detail { display: flex; gap: 24px; align-items: center; margin-top: 28px; padding-top: 24px; border-top: 1px solid #ddd; }
+    .detail .glyph { width: 72px; height: 72px; }
+    .detail .dark { padding: 14px; }
+    .detail p { margin: 0; font-size: 13px; }
+    @media (max-width: 560px) {
+      main { padding: 24px 20px; }
+      h1 { font-size: 22px; }
+      .enlarged { gap: 16px; margin: 24px 0; }
+      figure { min-height: 160px; }
+      .large { width: 100px; height: 100px; }
+      .detail { flex-wrap: wrap; gap: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Token BI · 双层额度环</h1>
+    <p>菜单栏单色模板图标</p>
+    <section class="enlarged" aria-label="放大图形">
+      <figure><img class="glyph large" src="menubar-template-source.png" alt="双层额度环黑色轮廓"></figure>
+      <figure class="dark"><img class="glyph large" src="menubar-template-source.png" alt="双层额度环白色轮廓"></figure>
+    </section>
+    <h2>浅色菜单栏 · 18pt</h2>
+    <div class="bar" aria-label="浅色菜单栏预览">
+      <img class="glyph" src="../../src-tauri/icons/menubar-template.png" alt="Token BI">
+      <img class="system" src="../../node_modules/lucide-static/icons/wifi.svg" alt="Wi-Fi">
+      <img class="system" src="../../node_modules/lucide-static/icons/volume-2.svg" alt="音量">
+      <img class="system battery" src="../../node_modules/lucide-static/icons/battery.svg" alt="电池">
+    </div>
+    <h2>深色菜单栏 · 18pt</h2>
+    <div class="bar dark" aria-label="深色菜单栏预览">
+      <img class="glyph" src="../../src-tauri/icons/menubar-template.png" alt="Token BI">
+      <img class="system" src="../../node_modules/lucide-static/icons/wifi.svg" alt="Wi-Fi">
+      <img class="system" src="../../node_modules/lucide-static/icons/volume-2.svg" alt="音量">
+      <img class="system battery" src="../../node_modules/lucide-static/icons/battery.svg" alt="电池">
+    </div>
+    <h2>高对比背景 · 18pt</h2>
+    <div class="bar selected" aria-label="高对比背景预览">
+      <img class="glyph" src="../../src-tauri/icons/menubar-template.png" alt="Token BI">
+      <img class="system" src="../../node_modules/lucide-static/icons/wifi.svg" alt="Wi-Fi">
+      <img class="system" src="../../node_modules/lucide-static/icons/volume-2.svg" alt="音量">
+      <img class="system battery" src="../../node_modules/lucide-static/icons/battery.svg" alt="电池">
+    </div>
+    <section class="detail" aria-label="小尺寸资源放大检查">
+      <img class="glyph" src="../../src-tauri/icons/menubar-template.png" alt="模板资源四倍放大">
+      <div class="dark"><img class="glyph" src="../../src-tauri/icons/menubar-template.png" alt="深色模板资源四倍放大"></div>
+      <p>36px 模板资源，按 18pt 显示；左侧为 4× 观察。<br>页面仅模拟系统着色，不代表原生菜单栏截图。</p>
+    </section>
+  </main>
+</body>
+</html>

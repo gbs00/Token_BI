@@ -18,6 +18,9 @@ mod updates;
 
 const PANEL_WIDTH: f64 = 311.0;
 const PANEL_HEIGHT: f64 = 600.0;
+#[cfg(any(target_os = "macos", test))]
+const MENUBAR_TEMPLATE: tauri::image::Image<'static> =
+    tauri::include_image!("icons/menubar-template.png");
 
 struct DesktopState {
     child: SharedChild,
@@ -108,10 +111,12 @@ pub fn run() {
             let qr = MenuItem::with_id(app, "qr", "扫码连接副屏", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Token BI", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &qr, &quit])?;
-            let tray = TrayIconBuilder::with_id("token-bi")
-                .icon(tauri::include_image!("icons/icon.png"))
-                .tooltip("Token BI")
-                .show_menu_on_left_click(false);
+            let tray = TrayIconBuilder::with_id("token-bi");
+            #[cfg(target_os = "macos")]
+            let tray = tray.icon(MENUBAR_TEMPLATE).icon_as_template(true);
+            #[cfg(not(target_os = "macos"))]
+            let tray = tray.icon(tauri::include_image!("icons/icon.png"));
+            let tray = tray.tooltip("Token BI").show_menu_on_left_click(false);
             // macOS 27 consumes left clicks when NSStatusItem has a resident menu
             // (tray-icon #355). Keep it detached and present it on right press only.
             #[cfg(not(target_os = "macos"))]
@@ -413,6 +418,23 @@ fn panel_quit(window: WebviewWindow, app: tauri::AppHandle) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn menubar_template_has_retina_resolution_and_transparent_negative_space() {
+        let image = MENUBAR_TEMPLATE;
+        assert_eq!((image.width(), image.height()), (36, 36));
+        let pixels: Vec<_> = image.rgba().chunks_exact(4).collect();
+        let visible = pixels.iter().filter(|p| p[3] > 127).count();
+        assert!((200..600).contains(&visible));
+        for (index, pixel) in pixels.iter().enumerate() {
+            let (x, y) = (index % 36, index / 36);
+            if x == 0 || x == 35 || y == 0 || y == 35 || (x == 18 && y == 18) {
+                assert_eq!(pixel[3], 0, "template background at {x},{y}");
+            }
+            if pixel[3] > 32 {
+                assert!(pixel[..3].iter().all(|channel| *channel <= 4));
+            }
+        }
+    }
     #[test]
     fn http_clients_initialize_with_updater_tls_features() {
         let _ = local_http_client();
