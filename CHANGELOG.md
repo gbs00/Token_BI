@@ -12,6 +12,7 @@
 - 增加模板尺寸、单色、透明边界和中心检查；设计源图和离屏对比不进入生产安装包。
 - 发布前 Python/浏览器 425 项、JavaScript 13 项、Rust 20 项及真实签名归档 1 项通过；格式、Clippy、依赖、打包服务、App/DMG 签名与只读挂载通过。App 为 184,506,082 字节，DMG 为 62,854,710 字节。
 - 升级继续沿用原 Updater 签名密钥，提供 DMG、更新归档、签名与版本清单；[发布说明](docs/RELEASE_NOTES_v1.2.5.md)及[图标设计记录](docs/design-previews/menubar-template.md)。
+- 已[正式发布](https://github.com/gbs00/Token_BI/releases/tag/v1.2.5)并通过本机应用内 1.2.4 → 1.2.5 下载、签名校验、安装与自动重启验证；[发布回执](docs/releases/v1.2.5-verification.md)。
 
 ## v1.2.4 - 存储重置与包体精简
 
