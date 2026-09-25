@@ -26,7 +26,7 @@ def local_client(app):
 def test_lan_cannot_manage_accounts(app, host, method, path, monkeypatch) -> None:
     def no_browser(*_args, **_kwargs):
         raise AssertionError("越权请求不应进入浏览器操作")
-    monkeypatch.setattr(app.state.container.browser_worker_service, "start_login_session", no_browser)
+    monkeypatch.setattr(app.state.container.web_session_service, "start_login_session", no_browser)
     client = TestClient(app, client=(host, 54321))
     response = client.request(method, path, json={})
     assert response.status_code == 403
@@ -174,7 +174,7 @@ def test_refresh_dashboard_endpoint_returns_live_payload(app) -> None:
     client = local_client(app)
     account_id = _create_account_with_context(app)
     minimized: list[str] = []
-    app.state.container.browser_worker_service.minimize_session = lambda account_id: minimized.append(account_id) or True
+    app.state.container.web_session_service.minimize_session = lambda account_id: minimized.append(account_id) or True
 
     response = client.post(f"/api/v1/dashboard/refresh?account_id={account_id}")
 
@@ -191,7 +191,7 @@ def test_account_session_login_creates_pending_account_and_opens_worker(app) -> 
     client = local_client(app)
     captured = {}
 
-    def fake_start_login_session(account_id: str, context_dir, target_url=None):
+    def fake_start_login_session(account_id: str, context_dir, target_url=None, expected_identity=None):
         captured["account_id"] = account_id
         captured["context_dir"] = str(context_dir)
         captured["target_url"] = target_url
@@ -202,7 +202,7 @@ def test_account_session_login_creates_pending_account_and_opens_worker(app) -> 
             current_url="https://chatgpt.com/#usage",
         )
 
-    app.state.container.browser_worker_service.start_login_session = fake_start_login_session
+    app.state.container.web_session_service.start_login_session = fake_start_login_session
 
     response = client.post("/api/v1/account-session/login")
 
@@ -222,8 +222,8 @@ def test_account_session_login_reuses_single_existing_account(app) -> None:
     ).json()["account"]
     app.state.container.account_service.update_account_status(existing["account_id"], "active")
 
-    app.state.container.browser_worker_service.start_login_session = (
-        lambda account_id, context_dir, target_url=None: BrowserSessionSnapshot(
+    app.state.container.web_session_service.start_login_session = (
+        lambda account_id, context_dir, target_url=None, expected_identity=None: BrowserSessionSnapshot(
             account_id=account_id,
             state=BrowserSessionState.AWAITING_LOGIN,
             context_dir=str(context_dir),
@@ -237,7 +237,30 @@ def test_account_session_login_reuses_single_existing_account(app) -> None:
     assert len(app.state.container.account_service.list_accounts()) == 1
 
 
-def test_account_session_logout_closes_worker_deletes_account_and_profile(app) -> None:
+@pytest.mark.parametrize("state,opens_web", [("source_changed", True), ("reauth_required", True),
+                                           ("stale", False), ("rate_limited", False)])
+def test_manual_login_opens_web_for_identity_or_challenge_but_not_network(app, monkeypatch, state, opens_web):
+    from app.models.usage_snapshot import PageState
+    client = local_client(app)
+    client.post("/api/v1/accounts", json={"masked_email": "user****@example.com"})
+    container = app.state.container
+    account = container.account_service.preferred_account().model_copy(update={"identity_key": "a" * 64})
+    container.account_service._write_accounts([account])
+    cli = container.usage_connector_manager.connectors[1]
+    monkeypatch.setattr(cli, "cli_available", lambda: True)
+    payload = container.usage_sync_coordinator.get_dashboard().model_copy(update={"state": PageState(state)})
+    monkeypatch.setattr(container.usage_sync_coordinator, "refresh", lambda: payload)
+    identities = []
+    def login(account_id, context_dir, *, expected_identity):
+        identities.append(expected_identity)
+        return BrowserSessionSnapshot(account_id=account_id, context_dir=str(context_dir), state=BrowserSessionState.AWAITING_LOGIN)
+    monkeypatch.setattr(container.web_session_service, "start_login_session", login)
+    response = client.post("/api/v1/account-session/login")
+    assert response.status_code == 200
+    assert identities == (["a" * 64] if opens_web else [])
+
+
+def test_account_session_logout_clears_binding_but_preserves_web_login(app) -> None:
     client = local_client(app)
     account = client.post(
         "/api/v1/accounts",
@@ -249,7 +272,7 @@ def test_account_session_logout_closes_worker_deletes_account_and_profile(app) -
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("cookie", encoding="utf-8")
     closed: list[str] = []
-    app.state.container.browser_worker_service.close_session = lambda account_id: closed.append(account_id)
+    app.state.container.web_session_service.close_session = lambda account_id=None: closed.append(account_id)
 
     response = client.post(f"/api/v1/account-session/logout?account_id={account_id}")
 
@@ -258,9 +281,9 @@ def test_account_session_logout_closes_worker_deletes_account_and_profile(app) -
     assert payload["action"] == "logout"
     assert payload["account_id"] == account_id
     assert payload["next_button_label"] == "登录账号"
-    assert closed == [account_id]
+    assert closed == [None]
     assert app.state.container.account_service.get_account(account_id) is None
-    assert context_dir.exists() is False
+    assert marker.read_text() == "cookie"
     assert app.state.container.account_service.access_state()[0] is False
     assert client.post("/api/v1/dashboard/refresh").json()["metrics"] == []
 
@@ -276,13 +299,14 @@ def test_login_after_logout_reuses_oauth_without_opening_chrome(app, monkeypatch
             self.calls += 1
             return UsageConnectorResult("codex_oauth", "oauth", "oauth_usage_api", {
                 "account_masked_email": "user****@example.com",
+                "account_identity_key": "a" * 64,
                 "windows": [{"metric_type": "weekly", "remaining_pct": 80}],
             })
     oauth = OAuth()
     monkeypatch.setattr(container.usage_connector_manager, "_connectors", [oauth])
     def no_browser(*_args, **_kwargs):
         raise AssertionError("存在 OAuth 时不应打开浏览器")
-    monkeypatch.setattr(container.browser_worker_service, "start_login_session", no_browser)
+    monkeypatch.setattr(container.web_session_service, "start_login_session", no_browser)
     auth = container.settings.codex_auth_paths[0]
     auth.write_text("synthetic credentials, do not modify", encoding="utf-8")
     client = local_client(app)
@@ -311,7 +335,7 @@ def test_diagnostics_returns_actionable_copy_for_common_states(app) -> None:
     payload = response.json()
     codes = {item["code"] for item in payload["items"]}
     assert "service_ready" in codes
-    assert "chrome_available" in codes
+    assert "webview_available" in codes
     assert "codex_auth_available" in codes
     assert "codex_cli_available" in codes
     assert "oauth_connector_ready" in codes
@@ -362,10 +386,10 @@ def test_service_startup_only_schedules_sync_without_probing_browser(container, 
         ]
     )
     launched: list[str] = []
-    monkeypatch.setattr(container.browser_worker_service, "start_login_session", lambda **kwargs: launched.append(kwargs))
+    monkeypatch.setattr(container.web_session_service, "start_login_session", lambda **kwargs: launched.append(kwargs))
     restored = []
     scheduled = []
-    monkeypatch.setattr(container.browser_worker_service, "restore_session_snapshot", lambda account: restored.append(account))
+    monkeypatch.setattr(container.web_session_service, "get_session_snapshot", lambda account_id: restored.append(account_id))
     monkeypatch.setattr(container.usage_sync_coordinator, "start", lambda: scheduled.append(True))
 
     container.startup()
@@ -379,7 +403,7 @@ def test_connector_order_prioritizes_oauth_and_cli_before_web_session(container)
     connector_names = [connector.name for connector in container.usage_connector_manager.connectors]
 
     assert connector_names[:2] == ["codex_oauth", "codex_cli_rpc"]
-    assert connector_names[-1] == "browser_worker"
+    assert connector_names[-1] == "wkwebview"
 
 
 def test_reauth_endpoint_starts_live_browser_worker(app) -> None:
@@ -391,7 +415,7 @@ def test_reauth_endpoint_starts_live_browser_worker(app) -> None:
     account_id = account["account_id"]
     captured = {}
 
-    def fake_start_login_session(account_id: str, context_dir, target_url=None):
+    def fake_start_login_session(account_id: str, context_dir, target_url=None, expected_identity=None):
         captured["account_id"] = account_id
         captured["context_dir"] = str(context_dir)
         captured["target_url"] = target_url
@@ -402,7 +426,7 @@ def test_reauth_endpoint_starts_live_browser_worker(app) -> None:
             current_url="https://chatgpt.com/#usage",
         )
 
-    app.state.container.browser_worker_service.start_login_session = fake_start_login_session
+    app.state.container.web_session_service.start_login_session = fake_start_login_session
 
     response = client.post(f"/api/v1/accounts/{account_id}/reauth")
 
@@ -422,7 +446,7 @@ def test_get_account_session_returns_worker_snapshot(app) -> None:
     ).json()["account"]
     account_id = account["account_id"]
 
-    app.state.container.browser_worker_service.restore_session_snapshot = (
+    app.state.container.web_session_service.get_session_snapshot = (
         lambda _: BrowserSessionSnapshot(
             account_id=account_id,
             state=BrowserSessionState.READY,

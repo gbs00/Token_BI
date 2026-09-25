@@ -82,6 +82,6 @@ def test_manual_sync_discards_older_poll_response(page):
     """ % (json.dumps(newer), json.dumps(older)))
     page.goto("http://tokenbi.test/dashboard")
     page.locator("[data-refresh-link]").click()
-    page.wait_for_function("document.querySelector('[data-metric-percent]').textContent === '51%'")
+    page.wait_for_function("document.querySelector('[data-metric-percent]')?.textContent === '51%'")
     page.evaluate("window.finishOld()")
     assert page.locator("[data-metric-percent]").inner_text() == "51%"

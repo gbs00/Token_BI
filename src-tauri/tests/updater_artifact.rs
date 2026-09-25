@@ -77,6 +77,11 @@ fn signed_release_download_install_and_tamper_rejection() {
     let exe = app_path.join("Contents/MacOS/token-bi");
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     std::fs::write(&exe, b"old version").unwrap();
+    for name in ["token-bi-control", "token-bi-backend"] {
+        let old_runtime = app_path.join(format!("Contents/Resources/{name}-runtime"));
+        std::fs::create_dir_all(&old_runtime).unwrap();
+        std::fs::write(old_runtime.join(name), b"old runtime").unwrap();
+    }
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
     context
         .config_mut()
@@ -118,15 +123,18 @@ fn signed_release_download_install_and_tamper_rejection() {
     server.join().unwrap();
     assert!(std::fs::metadata(&exe).unwrap().len() > 1000);
     let canonical_app = app_path.canonicalize().unwrap();
-    for runtime in ["token-bi-control", "token-bi-backend"] {
-        let alias = app_path.join(format!(
-            "Contents/Resources/{runtime}-runtime/_internal/Python3"
-        ));
-        assert!(std::fs::symlink_metadata(&alias)
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert!(alias.canonicalize().unwrap().starts_with(&canonical_app));
+    let runtime = app_path.join("Contents/Resources/token-bi-runtime");
+    let alias = runtime.join("_internal/Python3");
+    assert!(std::fs::symlink_metadata(&alias)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(alias.canonicalize().unwrap().starts_with(&canonical_app));
+    for name in ["token-bi-control", "token-bi-backend"] {
+        assert!(runtime.join(name).is_file());
+        assert!(!app_path
+            .join(format!("Contents/Resources/{name}-runtime"))
+            .exists());
     }
     assert!(std::process::Command::new("codesign")
         .args(["--verify", "--deep", "--strict"])

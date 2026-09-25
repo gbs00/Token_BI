@@ -65,22 +65,3 @@ def stop_dev_service(project_root: Path, service: str) -> bool:
         except FileNotFoundError:
             pass
     return stopped
-
-
-def stop_owned_chrome_workers(contexts_root: Path) -> None:
-    root = contexts_root.resolve()
-    def owns(process: psutil.Process) -> bool:
-        if Path(process.exe()).name != "Google Chrome":
-            return False
-        profile = next((arg.split("=", 1)[1] for arg in process.cmdline()
-                        if arg.startswith("--user-data-dir=")), None)
-        if not profile:
-            return False
-        profile_path = Path(profile).resolve()
-        return profile_path == root or root in profile_path.parents
-    for process in psutil.process_iter():
-        try:
-            if process.uids().real == os.getuid() and owns(process):
-                stop_owned_process(process.pid, owns)
-        except (psutil.Error, OSError, ValueError):
-            continue

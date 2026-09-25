@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -43,25 +42,6 @@ def _public_dashboard(payload) -> dict:
             "status": payload.account.status.value,
         }
     return result
-
-
-def _chrome_available() -> bool:
-    candidates = [
-        Path("/Applications/Google Chrome.app"),
-        Path.home() / "Applications" / "Google Chrome.app",
-    ]
-    if any(path.exists() for path in candidates):
-        return True
-    try:
-        result = subprocess.run(
-            ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return False
-    return bool(result.stdout.strip())
 
 
 @router.get("/accounts")
@@ -134,7 +114,7 @@ def create_account(request: Request, body: CreateAccountRequest) -> dict:
     container.session_service.ensure_context_dir(account.account_id)
     return {
         "account": account.model_dump(mode="json"),
-        "next_step": "Start the live browser worker on Mac, complete Codex login, then validate analytics access.",
+        "next_step": "在 Mac 端打开 Token BI 登录窗口，完成同一账号登录后读取额度。",
     }
 
 
@@ -147,9 +127,9 @@ def validate_account(request: Request, account_id: str) -> dict:
 
     payload = container.usage_sync_coordinator.refresh(account_id=account_id)
     updated = container.account_service.get_account(account_id)
-    session = container.browser_worker_service.get_session_snapshot(account_id)
+    session = container.web_session_service.get_session_snapshot(account_id)
     if payload.state == PageState.READY:
-        container.browser_worker_service.minimize_session(account_id)
+        container.web_session_service.minimize_session(account_id)
     if updated is None:
         raise HTTPException(status_code=500, detail="Unable to update account state.")
     return {
@@ -167,7 +147,7 @@ def get_account_session(request: Request, account_id: str) -> dict:
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 
-    session = container.browser_worker_service.restore_session_snapshot(account)
+    session = container.web_session_service.get_session_snapshot(account_id)
     return {
         "account_id": account_id,
         "session": session.model_dump(mode="json") if session else None,
@@ -184,15 +164,16 @@ def reauth_account(request: Request, account_id: str) -> dict:
     container.usage_sync_coordinator.resume()
     context_dir = container.session_service.ensure_context_dir(account_id)
     container.account_service.update_account_status(account_id=account_id, status="pending")
-    session = container.browser_worker_service.start_login_session(
+    session = container.web_session_service.start_login_session(
         account_id=account_id,
         context_dir=context_dir,
+        expected_identity=account.identity_key,
     )
     return {
         "account_id": account_id,
         "context_dir": str(context_dir),
         "session": session.model_dump(mode="json"),
-        "next_step": "Complete Codex login in the opened browser window and keep that worker running while the service is active.",
+        "next_step": "完成同一账号登录后窗口会收起，网页登录状态会保留。",
     }
 
 
@@ -213,7 +194,7 @@ def login_account_session(request: Request) -> dict:
                 "account": payload.account.model_dump(mode="json"), "session": None,
                 "message": "已恢复账号接入，并同步本机 Codex 额度。",
             }
-        if payload.state != PageState.REAUTH_REQUIRED:
+        if payload.state not in {PageState.REAUTH_REQUIRED, PageState.SOURCE_CHANGED}:
             return {"ok": False, "action": "resume", "session": None, "message": payload.message}
     account = container.account_service.preferred_account()
     if account is None:
@@ -227,9 +208,10 @@ def login_account_session(request: Request) -> dict:
             account = refreshed_account
 
     context_dir = container.session_service.ensure_context_dir(account.account_id)
-    session = container.browser_worker_service.start_login_session(
+    session = container.web_session_service.start_login_session(
         account_id=account.account_id,
         context_dir=context_dir,
+        expected_identity=account.identity_key,
     )
     return {
         "ok": session.state.value != "error",
@@ -237,8 +219,8 @@ def login_account_session(request: Request) -> dict:
         "next_button_label": "登录账号",
         "account": account.model_dump(mode="json"),
         "session": session.model_dump(mode="json"),
-        "message": ("未能打开登录窗口，请检查 Chrome 后重试。" if session.state.value == "error" else
-                    "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。"),
+        "message": ("未能打开原生登录窗口，请重试。" if session.state.value == "error" else
+                    "已打开 Token BI 登录窗口，完成登录后会自动同步额度。"),
     }
 
 
@@ -246,8 +228,10 @@ def login_account_session(request: Request) -> dict:
 def logout_account_session(request: Request, account_id: Optional[str] = None) -> dict:
     container = request.app.state.container
     account = container.account_service.preferred_account(account_id)
-    # 先撤销接入并使在途结果失效，再清理本应用的账号与浏览器目录。
+    # 只解除本工具的接入；不清理 WebKit/Chrome Cookie 或外部授权文件。
     container.usage_sync_coordinator.disconnect()
+    container.web_session_service.close_session()
+    container.account_service.clear_accounts()
     if account is None:
         return {
             "action": "logout",
@@ -256,19 +240,13 @@ def logout_account_session(request: Request, account_id: Optional[str] = None) -
             "message": "已暂停 Token BI 账号接入，本机 Codex 登录态保持不变。",
         }
 
-    container.browser_worker_service.close_session(account.account_id)
-    deleted = container.account_service.delete_account(account.account_id)
-    container.session_service.delete_context(account.account_id)
-    if deleted is None:
-        raise HTTPException(status_code=404, detail="Account not found.")
-
     return {
         "action": "logout",
         "account_id": account.account_id,
         "next_button_label": "登录账号",
         "message": (
-            "已清除 Token BI 账号记录和专用 Web 登录态。"
-            "本机 Codex OAuth / CLI 登录态不会被退出。"
+            "已解除 Token BI 账号接入授权。"
+            "Codex、CLI 和网页的登录状态保持不变。"
             "自动读取已暂停，点击登录账号后恢复接入。"
         ),
     }
@@ -280,14 +258,14 @@ def minimize_account_worker(request: Request, account_id: str) -> dict:
     account = container.account_service.get_account(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found.")
-    minimized = container.browser_worker_service.minimize_session(account_id)
+    minimized = container.web_session_service.minimize_session(account_id)
     return {"account_id": account_id, "minimized": minimized}
 
 
 @router.get("/diagnostics")
 def diagnostics(request: Request) -> dict:
     container = request.app.state.container
-    chrome_available = _chrome_available()
+    web_available = container.web_session_service.available()
     connector_names = {connector.name for connector in container.usage_connector_manager.connectors}
     oauth_connector = next(
         (connector for connector in container.usage_connector_manager.connectors if connector.name == "codex_oauth"),
@@ -316,10 +294,10 @@ def diagnostics(request: Request) -> dict:
             "next_step": "如果副屏打不开看板，请确认控制台里显示的实际端口，并重新扫码。",
         },
         {
-            "code": "chrome_available",
-            "title": "Chrome 登录窗口",
-            "severity": "ok" if chrome_available else "warning",
-            "next_step": "Token BI 需要 Google Chrome 作为专用登录窗口；未安装时请先安装 Chrome。",
+            "code": "webview_available",
+            "title": "原生登录窗口",
+            "severity": "ok" if web_available else "warning",
+            "next_step": "网页登录使用系统 WKWebView，无需安装 Chrome。组件缺失时请重新安装 Token BI。",
         },
         {
             "code": "login_required",
@@ -351,7 +329,7 @@ def diagnostics(request: Request) -> dict:
             "severity": "ok"
             if "codex_oauth" in connector_names and codex_auth_available
             else "warning",
-            "next_step": "OAuth 数据源是常规刷新首选链路，不会打开 Chrome 页面。",
+            "next_step": "OAuth 数据源是常规刷新首选链路，不会打开登录网页。",
         },
         {
             "code": "cli_rpc_connector_ready",
@@ -364,8 +342,8 @@ def diagnostics(request: Request) -> dict:
         {
             "code": "web_session_available",
             "title": "Web Session 兜底",
-            "severity": "info" if "browser_worker" in connector_names else "warning",
-            "next_step": "仅当前两条主链路不可用时，才进入专用 Chrome 登录窗口兜底。",
+            "severity": "info" if "wkwebview" in connector_names else "warning",
+            "next_step": "仅当前两条主链路不可用时，才尝试同账号 WKWebView 会话。",
         },
         {
             "code": "last_connector_error",

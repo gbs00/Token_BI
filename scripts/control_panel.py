@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
 
 from app.app_paths import resolve_app_data_dir, resolve_project_root
-from app.process_lifecycle import stop_owned_process, stop_owned_chrome_workers, owns_dev_service
+from app.process_lifecycle import stop_owned_process, owns_dev_service
 from app.http_access import allows_local_management
 from app.local_http import open_local_url
 import psutil
@@ -507,7 +507,7 @@ def _login_account_flow() -> dict:
     return {
         "ok": payload.get("ok", True),
         "message": payload.get("message")
-        or "已打开 Token BI 专用 Chrome 登录窗口。完成 Codex 登录后回到控制台刷新状态。",
+        or "已打开 Token BI 原生登录窗口，完成登录后自动同步额度。",
         "account": payload.get("account"),
         "session": payload.get("session"),
         "action": payload.get("action", "login"),
@@ -597,22 +597,14 @@ def _tail_log(lines: int = 20) -> str:
     return "\n".join(content[-lines:]) if content else "No server log yet."
 
 
-def _close_token_bi_chrome_workers() -> None:
-    stop_owned_chrome_workers(RUNTIME_DIR / "contexts")
-
-
 ERROR_COPIES = {
-    "chrome_missing": (
-        "未检测到 Chrome",
-        "Token BI 需要使用 Google Chrome 打开专用登录窗口。请安装 Chrome 后重新启动 App。",
-    ),
     "service_stopped": (
         "服务未启动",
         "请点击“启动 Token BI”。如果端口被占用，Token BI 会自动切换到下一个可用端口。",
     ),
     "login_required": (
         "需要登录账号",
-        "请点击“登录账号”，在弹出的 Token BI 专用 Chrome 窗口完成 Codex 登录和真人验证。",
+        "请点击“登录账号”，在 Token BI 原生窗口完成同一账号登录和真人验证。",
     ),
     "worker_lost": (
         "登录窗口已关闭或失联",
@@ -769,8 +761,6 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
             _shutdown_requested.set()
             try:
                 ok, message = _stop_main_server_process()
-                if ok:
-                    _close_token_bi_chrome_workers()
             except (OSError, RuntimeError) as exc:
                 ok, message = False, f"停止后台失败：{exc}"
             if ok:

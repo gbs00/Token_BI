@@ -181,3 +181,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target.no
 按需生成视觉截图：`TOKEN_BI_VISUAL_QA=1 ./.venv/bin/pytest -q tests/test_desktop_shell.py -k visual_evidence`。
 
 `tests/native_menubar_stub.py` 仅供原生隔离验证：只能在 8790 空闲、正式 App 未运行时手动启动，验证后必须停止，不得作为后台服务或发布内容。
+
+## 动态内环本地验收（2026-09-24）
+
+用户确认内环随额度同步更新，有有效 5h 时优先显示 5h，否则使用周额度。已实现并替换本机 App，未推送或发布；[取值、刷新策略、视觉预览与验证记录](TECH_DYNAMIC_QUOTA_ICON.md)。

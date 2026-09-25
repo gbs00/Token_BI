@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -22,12 +23,7 @@ class Settings:
     accounts_file: Path
     host: str
     port: int
-    analytics_url: str
-    manual_login_url: str
-    browser_app_name: str
-    browser_debug_host: str
-    browser_debug_base_port: int
-    scrape_timeout_ms: int
+    web_session_bin: Path
     codex_auth_paths: list[Path]
     codex_oauth_usage_url: str
     codex_cli_bin: str
@@ -76,18 +72,10 @@ def get_settings() -> Settings:
         accounts_file=config_dir / "accounts.json",
         host=os.getenv("TOKEN_BI_HOST", "0.0.0.0"),
         port=int(os.getenv("TOKEN_BI_PORT", "8787")),
-        analytics_url=os.getenv(
-            "TOKEN_BI_ANALYTICS_URL",
-            "https://chatgpt.com/codex/cloud/settings/analytics#usage",
-        ),
-        manual_login_url=os.getenv(
-            "TOKEN_BI_MANUAL_LOGIN_URL",
-            "https://chatgpt.com/#usage",
-        ),
-        browser_app_name=os.getenv("TOKEN_BI_BROWSER_APP_NAME", "Google Chrome"),
-        browser_debug_host=os.getenv("TOKEN_BI_BROWSER_DEBUG_HOST", "127.0.0.1"),
-        browser_debug_base_port=int(os.getenv("TOKEN_BI_BROWSER_DEBUG_BASE_PORT", "9222")),
-        scrape_timeout_ms=int(os.getenv("TOKEN_BI_SCRAPE_TIMEOUT_MS", "15000")),
+        web_session_bin=Path(os.getenv("TOKEN_BI_WEB_SESSION_BIN") or str(
+            (Path(sys.executable).resolve().parent.parent if getattr(sys, "frozen", False)
+             else project_root / "dist/native") / "Token BI Web Session.app/Contents/MacOS/TokenBIWebSession"
+        )),
         codex_auth_paths=codex_auth_paths,
         codex_oauth_usage_url=os.getenv(
             "TOKEN_BI_CODEX_OAUTH_USAGE_URL",

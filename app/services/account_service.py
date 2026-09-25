@@ -108,7 +108,7 @@ class AccountService:
             requested = next((item for item in accounts if item.account_id == preferred_account_id), None)
             if requested is not None:
                 for account in visible_accounts:
-                    if account.masked_email == requested.masked_email:
+                    if account.identity_key and account.identity_key == requested.identity_key:
                         return account
 
         return visible_accounts[0]
@@ -136,6 +136,10 @@ class AccountService:
 
             self._write_accounts(kept_accounts)
             return deleted_account
+
+    def clear_accounts(self) -> None:
+        with self._lock:
+            self._write_accounts([])
 
     def create_account(self, body: CreateAccountRequest) -> AccountRecord:
         with self._lock:
@@ -174,15 +178,16 @@ class AccountService:
         preferred_account_id: Optional[str] = None,
     ) -> list[AccountRecord]:
         visible_candidates = [account for account in accounts if not self._is_demo_account(account)]
-        deduped_by_email: dict[str, AccountRecord] = {}
+        deduped_by_identity: dict[str, AccountRecord] = {}
         for account in visible_candidates:
-            current = deduped_by_email.get(account.masked_email)
+            key = account.identity_key or account.account_id
+            current = deduped_by_identity.get(key)
             if current is None or self._account_rank(account, preferred_account_id) > self._account_rank(
                 current, preferred_account_id
             ):
-                deduped_by_email[account.masked_email] = account
+                deduped_by_identity[key] = account
 
-        visible_accounts = list(deduped_by_email.values())
+        visible_accounts = list(deduped_by_identity.values())
         active_accounts = [account for account in visible_accounts if account.status == AccountStatus.ACTIVE]
         if active_accounts:
             visible_accounts = active_accounts

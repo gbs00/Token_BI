@@ -12,8 +12,8 @@ from datetime import datetime
 import pytest
 
 from app.models.account import AccountRecord, AccountStatus
-from app.services.browser_worker_service import LiveSessionRequiredError
-from app.services.scraper_service import (
+from app.services.source_errors import LiveSessionRequiredError
+from app.services.source_errors import (
     AnalyticsPageChangedError,
     ScraperUnavailableError,
     SessionExpiredError,
@@ -87,7 +87,7 @@ class TypedFailingConnector:
 
 class FakeBrowserWorkerService:
     def fetch_usage(self, account):
-        return {
+        return {"category": "success", "identity": {"key": "a" * 64, "masked": "guo****@gmail.com"}, "usage": {
             "session_remaining_pct": 88,
             "session_reset_at": "2026-04-22T03:00:00+08:00",
             "weekly_remaining_pct": 71,
@@ -95,7 +95,7 @@ class FakeBrowserWorkerService:
             "updated_at": "2026-04-21T23:00:00+08:00",
             "source_detail": "network_response",
             "is_estimated": False,
-        }
+        }}
 
 
 def _build_account(test_settings) -> AccountRecord:
@@ -361,6 +361,49 @@ def test_connector_manager_redacts_sensitive_error_details(test_settings) -> Non
     assert "session-id" not in message
     assert "someone.long@example.com" not in message
     assert "some****@example.com" in message
+
+
+def test_rate_limit_stops_chain_and_is_scoped_to_account(test_settings):
+    account = _build_account(test_settings)
+    calls = []
+    class Limited:
+        name = "codex_oauth"
+        def fetch_usage(self, account):
+            calls.append(account.account_id)
+            raise ConnectorRateLimitedError("Limited", 120)
+    class MustNotRun:
+        name = "wkwebview"
+        def fetch_usage(self, account):
+            pytest.fail("限流时不得切换来源继续请求")
+    manager = UsageConnectorManager([Limited(), MustNotRun()])
+    for _ in range(2):
+        with pytest.raises(ConnectorChainError) as error:
+            manager.fetch_usage(account)
+        assert error.value.category == ConnectorFailureCategory.RATE_LIMITED
+    assert len(calls) == 1
+    other = account.model_copy(update={"account_id": "other", "identity_key": "b" * 64})
+    with pytest.raises(ConnectorChainError):
+        manager.fetch_usage(other)
+    assert len(calls) == 2
+
+
+def test_explicit_offline_stops_source_fallback(test_settings):
+    manager = UsageConnectorManager([
+        TypedFailingConnector("codex_oauth", ConnectorNetworkError("Offline", offline=True)), ReadyConnector(),
+    ])
+    with pytest.raises(ConnectorChainError) as error:
+        manager.fetch_usage(_build_account(test_settings))
+    assert error.value.category == ConnectorFailureCategory.NETWORK_ERROR
+
+
+def test_known_offline_waits_for_network_before_any_source(test_settings):
+    manager = UsageConnectorManager([ReadyConnector()])
+    manager.network_available = lambda: False
+    with pytest.raises(ConnectorChainError) as error:
+        manager.fetch_usage(_build_account(test_settings))
+    assert error.value.category == ConnectorFailureCategory.NETWORK_ERROR
+    manager.network_available = lambda: True
+    assert manager.fetch_usage(_build_account(test_settings)).connector_name == "ready"
 
 
 def test_primary_transient_error_is_not_overwritten_by_missing_web_session(test_settings) -> None:
@@ -658,14 +701,14 @@ def test_cli_rpc_connector_reads_account_and_rate_limit_windows(test_settings) -
     assert [window["window_minutes"] for window in result.payload["windows"]] == [300, 10080]
 
 
-def test_web_session_connector_uses_browser_worker(test_settings) -> None:
+def test_web_session_connector_normalizes_native_result(test_settings) -> None:
     account = _build_account(test_settings)
     connector = WebSessionConnector(FakeBrowserWorkerService())
 
     result = connector.fetch_usage(account)
 
-    assert result.connector_name == "browser_worker"
-    assert result.source_detail == "network_response"
+    assert result.connector_name == "wkwebview"
+    assert result.source_detail == "wkwebview_json"
     assert result.source_type == "web_session"
     assert result.payload["windows"][0]["remaining_pct"] == 88
 

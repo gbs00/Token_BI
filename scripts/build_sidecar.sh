@@ -10,11 +10,11 @@ CONTROL_LAUNCHER_SOURCE="$PROJECT_ROOT/src-tauri/control_launcher.rs"
 
 mkdir -p "$TARGET_DIR"
 
-"$PROJECT_ROOT/.venv/bin/pyinstaller" "$PROJECT_ROOT/token-bi-backend.spec" --noconfirm
-"$PROJECT_ROOT/.venv/bin/pyinstaller" "$PROJECT_ROOT/token-bi-control.spec" --noconfirm
-rustc --edition=2021 -C opt-level=3 "$CONTROL_LAUNCHER_SOURCE" -o "$CONTROL_TARGET"
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/build_web_session.py"
+
+"$PROJECT_ROOT/.venv/bin/pyinstaller" "$PROJECT_ROOT/token-bi.spec" --noconfirm
+rustc --edition=2021 -C opt-level=3 -C strip=symbols "$CONTROL_LAUNCHER_SOURCE" -o "$CONTROL_TARGET"
 chmod +x "$CONTROL_TARGET"
 
 echo "Built control launcher: $CONTROL_TARGET"
-echo "Built control runtime: $PROJECT_ROOT/dist/token-bi-control"
-echo "Built backend runtime: $PROJECT_ROOT/dist/token-bi-backend"
+echo "Built shared runtime: $PROJECT_ROOT/dist/token-bi-runtime"

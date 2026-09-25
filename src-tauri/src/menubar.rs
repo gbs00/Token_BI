@@ -14,6 +14,8 @@ use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEven
 #[cfg(target_os = "macos")]
 mod macos;
 mod onboarding;
+#[cfg(any(target_os = "macos", test))]
+mod quota_icon;
 mod updates;
 
 const PANEL_WIDTH: f64 = 311.0;
@@ -69,7 +71,10 @@ pub fn run() {
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                app.manage(quota_icon::QuotaIcon::default());
+            }
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("Token BI")
@@ -113,7 +118,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&open, &qr, &quit])?;
             let tray = TrayIconBuilder::with_id("token-bi");
             #[cfg(target_os = "macos")]
-            let tray = tray.icon(MENUBAR_TEMPLATE).icon_as_template(true);
+            let tray = tray.icon(quota_icon::image(None)).icon_as_template(true);
             #[cfg(not(target_os = "macos"))]
             let tray = tray.icon(tauri::include_image!("icons/icon.png"));
             let tray = tray.tooltip("Token BI").show_menu_on_left_click(false);
@@ -175,6 +180,8 @@ pub fn run() {
             }
             launch_services(app.handle());
             updates::start_scheduler(app.handle());
+            #[cfg(target_os = "macos")]
+            quota_icon::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -220,6 +227,8 @@ fn launch_services(app: &tauri::AppHandle) {
     }
     *boot = json!({"phase": "starting"});
     drop(boot);
+    #[cfg(target_os = "macos")]
+    quota_icon::clear(app);
     let app = app.clone();
     std::thread::spawn(move || {
         let state = app.state::<DesktopState>();
@@ -388,15 +397,33 @@ async fn panel_action(
     if state.bootstrap.lock().unwrap()["phase"] != "ready" {
         return Err("本地服务尚未就绪".into());
     }
-    let response = state
-        .client
-        .request(method.parse().unwrap(), format!("{CONTROL_URL}{path}"))
-        .timeout(Duration::from_secs(if method == "GET" { 12 } else { 95 }))
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| e.to_string())?;
-    response.json().await.map_err(|e| e.to_string())
+    #[cfg(target_os = "macos")]
+    let revision = (action == "status").then(|| quota_icon::begin(&app));
+    let response = async {
+        state
+            .client
+            .request(method.parse().unwrap(), format!("{CONTROL_URL}{path}"))
+            .timeout(Duration::from_secs(if method == "GET" { 12 } else { 95 }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
+            .await
+    }
+    .await
+    .map_err(|e: reqwest::Error| e.to_string());
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(revision) = revision {
+            quota_icon::complete(&app, revision, response.as_ref().ok());
+        }
+        if matches!(action.as_str(), "logout" | "login")
+            && response.as_ref().is_ok_and(|value| value["ok"] == true)
+        {
+            quota_icon::clear(&app);
+        }
+    }
+    response
 }
 
 #[tauri::command]

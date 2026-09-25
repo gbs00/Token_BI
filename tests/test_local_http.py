@@ -41,7 +41,6 @@ def test_local_backend_and_browser_probes_ignore_proxies(local_server, monkeypat
     monkeypatch.setenv("no_proxy", "")
     monkeypatch.setattr(control_panel, "_current_main_port", lambda: local_server.server_port)
     assert control_panel._main_api_request("GET", "/health") == {"ok": True}
-    assert container.browser_worker_service._debug_port_ready(local_server.server_port) is True
 
 
 def test_local_transport_does_not_follow_redirects(local_server):

@@ -11,7 +11,7 @@ from app.models.usage_snapshot import (
     PageState,
 )
 from app.services.account_service import AccountService
-from app.services.scraper_service import AnalyticsPageChangedError
+from app.services.source_errors import AnalyticsPageChangedError
 from app.services.session_service import SessionService
 from app.services.usage_connectors import (
     UsageConnectorManager,
@@ -54,7 +54,7 @@ class UsageService:
         connector_result = self._connector_manager.fetch_usage(account)
 
         identity = str(connector_result.payload.get("account_masked_email") or "").strip()
-        if not identity and connector_result.connector_name in {"codex_oauth", "codex_cli_rpc", "browser_worker"}:
+        if not identity and connector_result.connector_name in {"codex_oauth", "codex_cli_rpc", "wkwebview"}:
             identity = "Codex 账号"
         proposed = account.model_copy(update={
             "account_alias": identity if identity and identity != account.masked_email else account.account_alias,
@@ -89,7 +89,8 @@ class UsageService:
             return None
         account = self._resolve_account(account_id) or self._bootstrap_account()
         masked_email, key = identity
-        if account.identity_key == key and account.masked_email == masked_email:
+        # 已有绑定不随外部 App 换号；由 connector 校验并隔离其他账号。
+        if account.identity_key:
             return None
         return account.model_copy(update={
             "masked_email": masked_email, "account_alias": masked_email, "identity_key": key,

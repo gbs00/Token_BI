@@ -90,12 +90,11 @@ def test_start_timeout_retains_process_ownership_if_cleanup_fails(runtime, monke
 
 
 def test_shutdown_failure_keeps_control_alive_and_allows_retry(runtime, monkeypatch):
-    stops, closed = [], []
+    stops = []
     def stop():
         stops.append(1)
         return len(stops) > 1, "test stop result"
     monkeypatch.setattr(runtime, "_stop_main_server_process", stop)
-    monkeypatch.setattr(runtime, "_close_token_bi_chrome_workers", lambda: closed.append(1))
     server = runtime.ThreadingHTTPServer(("127.0.0.1", 0), runtime.ControlPanelHandler)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
@@ -107,12 +106,10 @@ def test_shutdown_failure_keeps_control_alive_and_allows_retry(runtime, monkeypa
             response = client.post("/api/app/shutdown", headers={"X-Token-BI-Control-Pid": str(os.getpid())})
             assert response.json()["ok"] is False
             assert worker.is_alive() and not runtime._shutdown_requested.is_set()
-            assert closed == []
             assert client.post("/api/app/shutdown").json()["ok"] is True
             worker.join(2)
             assert not worker.is_alive()
             assert runtime._shutdown_requested.is_set()
-            assert closed == [1]
     finally:
         server.shutdown()
         server.server_close()

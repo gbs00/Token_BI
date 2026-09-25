@@ -135,6 +135,18 @@ def test_boot_failure_is_inline_and_retry_does_not_open_new_window(panel):
     assert panel.evaluate("calls.some(c=>c[1]==='retry_start')")
 
 
+@pytest.mark.parametrize("state,action", [("source_changed", "login"), ("reauth_required", "login"),
+                                        ("stale", "refresh"), ("rate_limited", "refresh")])
+def test_login_recovery_is_explicit_and_network_errors_do_not_open_login(panel, state, action):
+    panel.add_init_script(f"window.payload.dashboard.state='{state}';")
+    panel.goto("http://tokenbi.test/index.html")
+    button = panel.locator('[data-action="retry"]')
+    assert button.inner_text() == ("查看登录页" if action == "login" else "重试")
+    assert not panel.evaluate("calls.some(c=>c[1]==='login')")
+    button.click()
+    assert panel.evaluate(f"calls.some(c=>c[1]==='{action}')")
+
+
 def test_cold_tray_qr_request_survives_frontend_initialization(panel):
     panel.add_init_script("window.openQR=true")
     panel.goto("http://tokenbi.test/index.html")

@@ -111,6 +111,39 @@ def _failure(category, *, immediate_retry=False, retry_after_seconds=None):
     )
 
 
+def test_wake_keeps_due_time_and_does_not_replay_missed_ticks(container):
+    _create_active_account(container)
+    now = [datetime.now(timezone.utc)]
+    coordinator, manager, _ = _build_coordinator(container, now=lambda: now[0])
+    coordinator.refresh()
+    due = coordinator.get_dashboard().summary.next_sync_at
+    coordinator.web_event("wake")
+    assert coordinator.get_dashboard().summary.next_sync_at == due
+    assert coordinator._seconds_until_next_sync() == 180
+    now[0] += timedelta(hours=2)
+    assert coordinator._seconds_until_next_sync() == 0
+    coordinator.start()
+    try:
+        deadline = time.monotonic() + 2
+        while manager.calls < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.05)
+        assert manager.calls == 2
+        assert coordinator._seconds_until_next_sync() == 180
+    finally:
+        coordinator.stop()
+
+
+def test_web_events_cannot_resume_disconnected_account(container):
+    coordinator, manager, _ = _build_coordinator(container)
+    coordinator.disconnect()
+    for event in ("session_ready", "wake", "login_closed"):
+        coordinator.web_event(event)
+    assert coordinator.get_dashboard().summary.next_sync_at is None
+    assert manager.calls == 0
+    assert container.account_service.access_state()[0] is False
+
+
 def test_success_is_persisted_as_one_safe_atomic_snapshot(container) -> None:
     _create_active_account(container)
     coordinator, _, store = _build_coordinator(container)
@@ -233,17 +266,15 @@ def test_local_oauth_identity_is_checked_before_network_failure(container, tmp_p
     worker = threading.Thread(target=coordinator.refresh)
     worker.start()
     try:
-        assert started.wait(2)
-        pending = coordinator.get_dashboard()
         if new_email != "user.one@example.com":
-            assert pending.metrics == []
-            assert pending.account.identity_key != ready.account.identity_key
-            assert pending.account.status == AccountStatus.PENDING
-            assert pending.account.last_validated_at is None
-            assert not store.snapshot_path.exists()
+            worker.join(2)
+            assert not started.is_set()  # 不读取另一账号的上游额度。
         else:
-            assert pending.metrics == ready.metrics
-            assert store.snapshot_path.exists()
+            assert started.wait(2)
+        pending = coordinator.get_dashboard()
+        assert pending.metrics == ready.metrics
+        assert pending.account.identity_key == ready.account.identity_key
+        assert store.snapshot_path.exists()
     finally:
         release.set()
         worker.join(3)
@@ -251,8 +282,9 @@ def test_local_oauth_identity_is_checked_before_network_failure(container, tmp_p
     result = coordinator.get_dashboard()
     restored, _, _ = _build_coordinator(container, manager)
     if new_email != "user.one@example.com":
-        assert result.metrics == []
-        assert restored.get_dashboard().metrics == []
+        assert result.state == PageState.SOURCE_CHANGED
+        assert result.account.identity_key == ready.account.identity_key
+        assert restored.get_dashboard().metrics == ready.metrics
     else:
         assert result.state == PageState.STALE
         assert result.metrics == ready.metrics

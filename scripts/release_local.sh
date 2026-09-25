@@ -10,11 +10,17 @@ cd "$PROJECT_ROOT"
 : "${TAURI_SIGNING_PRIVATE_KEY:?Set TAURI_SIGNING_PRIVATE_KEY to the private key path or CI secret}"
 
 TEST_DATA="$(mktemp -d "${TMPDIR:-/tmp}/token-bi-release.XXXXXX")"
-trap 'rm -rf "$TEST_DATA"' EXIT
+cleanup() {
+  "$PROJECT_ROOT/.venv/bin/python" -c 'import pathlib, shutil, sys; p=pathlib.Path(sys.argv[1]); assert p.name.startswith("token-bi-release.") and p.is_dir(); shutil.rmtree(p)' "$TEST_DATA"
+}
+trap cleanup EXIT
 export TOKEN_BI_APP_DATA_DIR="$TEST_DATA"
 export PYTHONDONTWRITEBYTECODE=1
 
 "$PROJECT_ROOT/.venv/bin/python" -m pip check
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/build_web_session.py"
+"$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/scripts/build_wkwebview_probe.py"
+export TOKEN_BI_NATIVE_WK_TEST=1
 "$PROJECT_ROOT/.venv/bin/python" -c 'from pathlib import Path; from playwright.sync_api import sync_playwright; p = sync_playwright().start(); assert all(Path(b.executable_path).is_file() for b in (p.chromium, p.webkit)), "Install Chromium and WebKit before releasing"; p.stop()'
 "$PROJECT_ROOT/.venv/bin/pytest" -q -p no:cacheprovider
 npm run desktop:test

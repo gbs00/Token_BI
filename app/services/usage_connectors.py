@@ -19,8 +19,10 @@ import httpx
 
 from app import __version__
 from app.models.account import AccountRecord, identity_key
-from app.services.browser_worker_service import BrowserWorkerService, LiveSessionRequiredError
-from app.services.scraper_service import (
+from app.services.web_session_service import WebSessionService
+from app.services.source_errors import (
+    AccountMismatchError,
+    LiveSessionRequiredError,
     AnalyticsPageChangedError,
     ScraperUnavailableError,
     SessionExpiredError,
@@ -38,9 +40,10 @@ class ConnectorRateLimitedError(ScraperUnavailableError):
 
 
 class ConnectorNetworkError(ScraperUnavailableError):
-    def __init__(self, message: str, immediate_retry: bool = False) -> None:
+    def __init__(self, message: str, immediate_retry: bool = False, offline: bool = False) -> None:
         super().__init__(message)
         self.immediate_retry = immediate_retry
+        self.offline = offline
 
 
 class ConnectorTimeoutError(ScraperUnavailableError):
@@ -57,6 +60,7 @@ class ConnectorFailureCategory(str, Enum):
     RATE_LIMITED = "rate_limited"
     SOURCE_CHANGED = "source_changed"
     WEB_SESSION_INACTIVE = "web_session_inactive"
+    ACCOUNT_MISMATCH = "account_mismatch"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -168,6 +172,9 @@ class CodexOAuthConnector:
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
         access_token, id_token = self._read_auth_tokens()
+        email = self._extract_email(id_token) or self._extract_email(access_token)
+        if account.identity_key and (not email or identity_key(email) != account.identity_key):
+            raise AccountMismatchError("本地 OAuth 与 Token BI 绑定账号不同，未请求该账号额度。")
         if self._token_expired(access_token):
             raise SessionExpiredError("Codex local login expired. Please complete Codex login again.")
 
@@ -297,8 +304,10 @@ class CodexOAuthConnector:
             raw = asyncio.run(fetch_with_deadline())
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            if code in {401, 403}:
+            if code == 401:
                 raise SessionExpiredError("Codex login is not authorized for usage data.") from exc
+            if code == 403:
+                raise AnalyticsPageChangedError("Codex 额度访问被拒绝，不能据此判定登录已过期。") from exc
             if code == 429:
                 retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
                 raise ConnectorRateLimitedError(
@@ -543,21 +552,50 @@ class LocalCodexConnector:
 
 
 class WebSessionConnector:
-    name = "browser_worker"
+    name = "wkwebview"
     source_type = "web_session"
 
-    def __init__(self, browser_worker_service: BrowserWorkerService) -> None:
-        self._browser_worker_service = browser_worker_service
+    def __init__(self, web_session_service: WebSessionService) -> None:
+        self._web_session_service = web_session_service
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
-        payload = self._browser_worker_service.fetch_usage(account)
-        source_detail = str(payload.get("source_detail", "live_browser_unknown"))
+        try:
+            result = self._web_session_service.fetch_usage(account)
+        except TimeoutError as exc:
+            raise ConnectorTimeoutError("网页组件未在截止时间内响应。") from exc
+        except OSError as exc:
+            raise ConnectorNetworkError("网页组件暂不可用，已保留上次成功数据。") from exc
+        category = result.get("category")
+        if category == "auth_required":
+            raise SessionExpiredError("网页会话已失效，请在 Token BI 中重新登录。")
+        if category == "rate_limited":
+            delays = [row.get("retry_after_seconds", 20) for row in result.get("requests", []) if isinstance(row, dict)]
+            delay = max([20, *[v for v in delays if isinstance(v, (float, int)) and 0 <= v <= 86400]])
+            raise ConnectorRateLimitedError("网页额度接口暂时限流。", delay)
+        if category in {"network_error", "offline", "web_process_terminated", "javascript_error"}:
+            raise ConnectorNetworkError("网页额度暂不可用，已保留上次成功数据。", offline=category == "offline")
+        if category == "timeout":
+            raise ConnectorTimeoutError("网页额度读取超时。")
+        if category in {"account_mismatch", "identity_changed", "identity_unknown"}:
+            raise AccountMismatchError("网页账号与当前账号不一致或无法确认，未采纳额度。")
+        if category != "success" or not isinstance(result.get("usage"), dict):
+            raise AnalyticsPageChangedError("网页验证未完成或额度格式变化，请在 Token BI 查看登录网页。")
+        identity = result.get("identity") or {}
+        key = identity.get("key")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key):
+            raise AccountMismatchError("无法确认网页账号，未采纳额度。")
+        if account.identity_key and account.identity_key != key:
+            raise AccountMismatchError("网页账号与当前账号不同，未采纳额度。")
+        payload = result["usage"]
+        source_detail = "dom_fallback" if result.get("source_detail") == "dom_fallback" else "wkwebview_json"
         source_type = "dom_fallback" if source_detail == "dom_fallback" else self.source_type
         normalized = normalize_usage_payload(
             payload,
             source_type=source_type,
             source_detail=source_detail,
         )
+        normalized["account_identity_key"] = key
+        normalized["account_masked_email"] = mask_identity(str(identity.get("masked") or "Codex 账号"))
         return UsageConnectorResult(
             connector_name=self.name,
             source_type=source_type,
@@ -570,6 +608,9 @@ class UsageConnectorManager:
     def __init__(self, connectors: Iterable[UsageConnector]) -> None:
         self._connectors = list(connectors)
         self.last_connector_errors: list[dict[str, str]] = []
+        self._rate_limited_until = 0.0
+        self._rate_limited_account = None
+        self.network_available = lambda: None
 
     @property
     def connectors(self) -> list[UsageConnector]:
@@ -586,13 +627,31 @@ class UsageConnectorManager:
 
     def fetch_usage(self, account: AccountRecord) -> UsageConnectorResult:
         failures: list[ConnectorFailure] = []
+        if self.network_available() is False:
+            failure = self._to_failure("network", ConnectorNetworkError("本机网络未连接。", offline=True))
+            raise ConnectorChainError(failure, [failure])
+        remaining = self._rate_limited_until - time.monotonic()
+        account_key = account.identity_key or account.account_id
+        if remaining > 0 and account_key == self._rate_limited_account:
+            failure = self._to_failure("quota_api", ConnectorRateLimitedError("额度接口限流冷却中。", remaining))
+            raise ConnectorChainError(failure, [failure])
         for connector in self._connectors:
             try:
                 result = connector.fetch_usage(account)
+                if connector.name in {"codex_oauth", "codex_cli_rpc", "wkwebview"}:
+                    key = result.payload.get("account_identity_key")
+                    if not key or (account.identity_key and account.identity_key != key):
+                        raise AccountMismatchError("数据源账号与当前绑定不一致或无法确认，未采纳额度。")
                 self.last_connector_errors = self._serialize_failures(failures)
                 return result
             except ScraperUnavailableError as exc:
                 failures.append(self._to_failure(connector.name, exc))
+                if isinstance(exc, ConnectorRateLimitedError):
+                    self._rate_limited_account = account_key
+                    self._rate_limited_until = time.monotonic() + max(20, exc.retry_after_seconds or 0)
+                    break
+                if isinstance(exc, ConnectorNetworkError) and exc.offline:
+                    break
                 continue
             except Exception as exc:
                 failures.append(
@@ -625,6 +684,8 @@ class UsageConnectorManager:
             category = ConnectorFailureCategory.AUTH_REQUIRED
         elif isinstance(exc, ConnectorRateLimitedError):
             category = ConnectorFailureCategory.RATE_LIMITED
+        elif isinstance(exc, AccountMismatchError):
+            category = ConnectorFailureCategory.ACCOUNT_MISMATCH
         elif isinstance(exc, AnalyticsPageChangedError):
             category = ConnectorFailureCategory.SOURCE_CHANGED
         elif isinstance(exc, ConnectorTimeoutError):
@@ -663,6 +724,7 @@ class UsageConnectorManager:
         # 高优数据源的真实错误优先，Web Session 仅作为最后兜底，不能覆盖根因。
         for category in (
             ConnectorFailureCategory.RATE_LIMITED,
+            ConnectorFailureCategory.ACCOUNT_MISMATCH,
             ConnectorFailureCategory.SOURCE_CHANGED,
             ConnectorFailureCategory.TIMEOUT,
             ConnectorFailureCategory.NETWORK_ERROR,

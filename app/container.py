@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.services.account_service import AccountService
-from app.services.browser_worker_service import BrowserWorkerService
+from app.services.web_session_service import WebSessionService
 from app.services.latest_dashboard_store import LatestDashboardStore
-from app.services.scraper_service import ScraperService
 from app.services.session_service import SessionService
 from app.services.usage_connectors import (
     CodexCliRpcConnector,
@@ -22,8 +21,8 @@ class ServiceContainer:
         self.settings = settings
         self.account_service = AccountService(settings)
         self.session_service = SessionService(settings)
-        self.scraper_service = ScraperService(settings)
-        self.browser_worker_service = BrowserWorkerService(settings, self.scraper_service)
+        self.web_session_service = WebSessionService(settings)
+        self.web_session_service.access_enabled = lambda: self.account_service.access_state()[0]
         usage_connectors = [
             CodexOAuthConnector(
                 auth_paths=settings.codex_auth_paths,
@@ -37,8 +36,9 @@ class ServiceContainer:
         ]
         if settings.local_snapshot_connector_enabled:
             usage_connectors.append(LocalCodexConnector(settings.runtime_local_connector_dir))
-        usage_connectors.append(WebSessionConnector(self.browser_worker_service))
+        usage_connectors.append(WebSessionConnector(self.web_session_service))
         self.usage_connector_manager = UsageConnectorManager(connectors=usage_connectors)
+        self.usage_connector_manager.network_available = self.web_session_service.network_available
         self.usage_service = UsageService(
             account_service=self.account_service,
             session_service=self.session_service,
@@ -51,11 +51,12 @@ class ServiceContainer:
             usage_service=self.usage_service,
             snapshot_store=self.latest_dashboard_store,
         )
+        self.web_session_service.on_event = self.usage_sync_coordinator.web_event
 
     def startup(self) -> None:
-        # Web fallback restores its session on demand; never block health on CDP.
+        # 网页组件仅在需要兜底时启动，不阻塞服务健康检查。
         self.usage_sync_coordinator.start()
 
     def shutdown(self) -> None:
         self.usage_sync_coordinator.stop()
-        self.browser_worker_service.shutdown()
+        self.web_session_service.shutdown()

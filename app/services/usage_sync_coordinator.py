@@ -8,9 +8,10 @@ from typing import Callable, Optional
 
 from app.models.usage_snapshot import DashboardPayload, DashboardSummary, PageState
 from app.models.account import same_account_identity
-from app.services.browser_worker_service import LiveSessionRequiredError
 from app.services.latest_dashboard_store import LatestDashboardStore
-from app.services.scraper_service import (
+from app.services.source_errors import (
+    AccountMismatchError,
+    LiveSessionRequiredError,
     AnalyticsPageChangedError,
     ScraperUnavailableError,
     SessionExpiredError,
@@ -185,11 +186,21 @@ class UsageSyncCoordinator:
             self._usage_service.set_access_enabled(True)
             self.clear()
 
+    def web_event(self, event: str) -> None:
+        if not self._usage_service.access_state()[0]:
+            return
+        if event == "session_ready":
+            with self._state_lock:
+                self._current.summary.next_sync_at = self._now()
+        if event in {"session_ready", "wake"}:
+            self._schedule_changed.set()
+
     def _run(self) -> None:
         while not self._stop_event.is_set():
             delay = self._seconds_until_next_sync()
             if delay > 0:
-                self._schedule_changed.wait(timeout=delay)
+                # 使用同一个调度循环定期核对墙钟，睡眠恢复后不再等待旧的相对间隔。
+                self._schedule_changed.wait(timeout=min(delay, 5.0))
                 self._schedule_changed.clear()
                 continue
             try:
@@ -369,6 +380,8 @@ class UsageSyncCoordinator:
             category = ConnectorFailureCategory.AUTH_REQUIRED
         elif isinstance(exc, ConnectorRateLimitedError):
             category = ConnectorFailureCategory.RATE_LIMITED
+        elif isinstance(exc, AccountMismatchError):
+            category = ConnectorFailureCategory.ACCOUNT_MISMATCH
         elif isinstance(exc, AnalyticsPageChangedError):
             category = ConnectorFailureCategory.SOURCE_CHANGED
         elif isinstance(exc, ConnectorTimeoutError):
@@ -442,7 +455,7 @@ class UsageSyncCoordinator:
             return PageState.REAUTH_REQUIRED
         if category == ConnectorFailureCategory.RATE_LIMITED:
             return PageState.RATE_LIMITED
-        if category == ConnectorFailureCategory.SOURCE_CHANGED:
+        if category in {ConnectorFailureCategory.SOURCE_CHANGED, ConnectorFailureCategory.ACCOUNT_MISMATCH}:
             return PageState.SOURCE_CHANGED
         if category in {
             ConnectorFailureCategory.WEB_SESSION_INACTIVE,
@@ -452,6 +465,8 @@ class UsageSyncCoordinator:
         return PageState.STALE if has_stale else PageState.ERROR
 
     def _public_message(self, category: ConnectorFailureCategory, has_stale: bool = False) -> str:
+        if category == ConnectorFailureCategory.ACCOUNT_MISMATCH:
+            return "数据源账号与当前绑定不一致或无法确认，请使用同一账号；未混用额度。"
         if category == ConnectorFailureCategory.AUTH_REQUIRED:
             return "未检测到可用的 Codex 登录态，请在 Codex App、CLI 或网页端完成登录。"
         if category == ConnectorFailureCategory.RATE_LIMITED:

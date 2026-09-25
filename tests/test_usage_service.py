@@ -6,7 +6,7 @@ import pytest
 
 from app.models.account import AccountStatus, CreateAccountRequest
 from app.models.usage_snapshot import PageState
-from app.services.scraper_service import AnalyticsPageChangedError, SessionExpiredError
+from app.services.source_errors import AnalyticsPageChangedError, SessionExpiredError
 from app.services.usage_connectors import UsageConnectorResult
 from app.services.usage_service import UsageService
 

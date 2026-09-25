@@ -8,14 +8,17 @@
 
 ## 本地构建
 
-安装项目 Python / Node / Rust 依赖，并准备 Chromium、WebKit 测试浏览器：
+安装项目 Python / Node / Rust 依赖及 Xcode 命令行工具，并准备 Chromium、WebKit 测试浏览器。Playwright 仅为开发测试依赖；原生集成测试需要 macOS 图形登录会话：
 
 ```sh
+./.venv/bin/python -m pip install -r requirements-dev.txt
 ./.venv/bin/python -m playwright install chromium webkit
 TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWORD= ./scripts/release_local.sh
 ```
 
 脚本使用临时数据目录，执行 Python、JS、Rust 测试与 Clippy / 格式 / 依赖检查；然后完整构建 control、backend、shell，验证 App 深度签名、当前版本 DMG 和真实签名更新归档。安装测试只替换临时副本，不替换本地安装、不上传。
+
+`token-bi.spec` 是两个 Python 服务唯一的打包入口，使用共享 `COLLECT` 生成 `dist/token-bi-runtime`。App 内两个服务各自运行，但 Python framework、标准库和扩展库统一存放于 `Resources/token-bi-runtime/_internal`；不再生成或引用两套独立运行库。服务模块仍按各自入口收集，控制服务不会因此预加载额度采集逻辑。Rust 发布构建与启动器裁剪符号表，HTTPX 仅排除可选命令行入口和代码高亮库，不移除 HTTP 客户端。
 
 产物：
 
@@ -36,7 +39,7 @@ TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWOR
 - 菜单栏的 0/99/100%、单/双额度、QR、异常和矮屏均能使用。
 - Web 横竖屏、地址栏变化、用户缩放、离线恢复和旧浏览器回退通过；真机未覆盖项明确披露。
 - 用成套打包的 control/backend 做隔离健康与网页测试，不能只验证源码服务。
-- `verify_bundle.py` 同时检查 Python framework 链接完整且未越出运行库、旧控制台未入包，以及 App 不超过 195MB（十进制、符号链接不重复计入）的体积预算。macOS 运行库使用 `bundle.macOS.files` 保留链接；不要改回逐文件复制的 `bundle.resources`，也不要签名后修改 App。
+- `verify_bundle.py` 检查仅一套 Python framework / base_library、两个服务入口及链接完整、旧运行库/控制台/Playwright/Node/HTTPX 命令行依赖未入包、原生网页登录组件存在，以及 App 不超过 50MB（十进制、符号链接不重复计入）的体积预算。使用隔离 HTTP fixture 验证冻结后的 HTTPX 请求、失败保留缓存、恢复和退出不清除外部凭据。macOS 运行库使用 `bundle.macOS.files` 保留链接；不要改回逐文件复制的 `bundle.resources`，也不要签名后修改 App。
 - DMG 可挂载、包内 App 签名有效。保留用户数据；不要把演示页、凭据、运行日志和备份 App 上传仓库。
 
 ## 手动上传

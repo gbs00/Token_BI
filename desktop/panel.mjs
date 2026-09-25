@@ -25,14 +25,16 @@ function render() {
   $('email').title = $('email').textContent;
   $('source').textContent = [sources[model.summary.source_type], lastSuccess(model.summary)].filter(Boolean).join(' · ');
   const failing = ['stale', 'error', 'rate_limited', 'source_changed', 'reauth_required'].includes(model.state);
+  const loginNeeded = ['reauth_required', 'source_changed'].includes(model.state);
   const issue = boot.phase === 'error' ? boot.message : status?.healthy === false
     ? status.health_error || '本地服务未运行，请重试。'
     : (failing ? model.message || '本次同步未成功，将自动重试。' : '');
   $('notice').hidden = !issue;
+  $('notice').querySelector('[data-action="retry"]').textContent = boot.phase === 'ready' && status?.healthy !== false && loginNeeded ? '查看登录页' : '重试';
   $('notice-text').textContent = issue ? `${issue}${hasMetrics ? ' 当前显示上次成功数据。' : ''}` : '';
   $('empty').hidden = hasMetrics;
   $('metrics').hidden = !hasMetrics;
-  $('login').hidden = boot.phase !== 'ready' || (model.authenticated && model.state !== 'reauth_required');
+  $('login').hidden = boot.phase !== 'ready' || (model.authenticated && !loginNeeded);
   $('empty-title').textContent = boot.phase === 'starting' ? '正在连接本地服务' : boot.phase === 'error' ? '本地服务暂不可用'
     : !model.authenticated ? '未检测到可用账号' : '等待额度数据';
   $('empty-copy').textContent = boot.phase !== 'ready' ? '' : !model.authenticated ? '登录后即可查看 Codex 使用额度' : '等待下一次同步';
@@ -205,7 +207,7 @@ async function perform(action) {
 function confirmAction(action) {
   const quitting = action === 'quit';
   $('confirm-title').textContent = quitting ? '退出 Token BI？' : '退出当前账号？';
-  $('confirm-copy').textContent = quitting ? '副屏将停止更新，重新打开 App 后恢复。' : 'Token BI 将暂停读取当前账号，不会退出本机 Codex CLI 的登录。';
+  $('confirm-copy').textContent = quitting ? '副屏将停止更新，重新打开 App 后恢复。' : '仅解除 Token BI 的账号接入，不会退出 Codex、CLI 或网页账号。';
   $('confirm-button').textContent = quitting ? '退出' : '退出账号';
   $('confirm-button').onclick = async () => {
     $('confirm-dialog').close();
@@ -227,7 +229,7 @@ async function handleAction(action) {
     if (!native) feedback('预览模式，不打开真实看板');
     return;
   }
-  if (action === 'retry') return perform(boot.phase === 'error' || status?.healthy === false || status?.running === false ? 'retry_start' : viewModel(status).state === 'reauth_required' ? 'login' : 'refresh');
+  if (action === 'retry') return perform(boot.phase === 'error' || status?.healthy === false || status?.running === false ? 'retry_start' : ['reauth_required', 'source_changed'].includes(viewModel(status).state) ? 'login' : 'refresh');
   if (action === 'refresh' || action === 'login') return perform(action);
 }
 document.addEventListener('click', event => {
