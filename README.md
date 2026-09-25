@@ -4,6 +4,8 @@
 
 原生 WKWebView 网页登录、动态额度内环与共享 Python 运行库已完成本机验证；App 缩至 40.14 MB。[登录与性能验证](docs/releases/v1.2.6-verification.md)、[包体精简与安装验证](docs/releases/v1.2.6-shared-runtime.md)。
 
+已于 2026-09-25 正式发布 [v1.2.6](https://github.com/gbs00/Token_BI/releases/tag/v1.2.6)，支持设置内检查并确认更新；[发布回执与制品校验](docs/releases/v1.2.6-release.md)。
+
 Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备副屏看板。安装后点击 Mac 菜单栏图标查看账号、剩余额度与重置时间；局域网服务自动启动，扫码即可连接副屏。隐藏面板不停止同步，退出 App 才停止本实例启动的服务。
 
 - 获取逻辑：OAuth > CLI RPC > WKWebView，同账号校验后才采纳；副屏读取本地缓存，不因多开页面放大官方请求。网页登录不再依赖 Chrome 或生产 Playwright。
