@@ -57,7 +57,7 @@ TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWOR
 
 Developer ID 证书、公证凭据和 updater 私钥必须保存在仓库外，私钥权限应为 0600 并安全备份。当前公钥已固化；后续版本必须继续使用同一私钥，不能随意重新生成，否则现有客户端无法校验。私钥不进入客户端或更新说明。
 
-Actions 工作流仍停用。启用前需由发布者配置 `TAURI_SIGNING_PRIVATE_KEY` 和对应密码 Secret，确认 arm64 runner。新流程只创建包含完整资源的草稿，验收后人工发布，避免与手动流程重复。
+旧 Release Actions 发布工作流仍停用。启用前需由发布者配置 `TAURI_SIGNING_PRIVATE_KEY` 和对应密码 Secret，确认 arm64 runner。发布流程只创建包含完整资源的草稿，验收后人工发布，避免与手动流程重复；独立的 Checks 回归工作流不参与发布。
 
 Apple 签名/公证、Intel/Universal、干净机器安装、真实运行版本 N → N+1 重启及副屏恢复、长期常驻仍需独立验收。详见 [技术纪要](TECH_v1.2.1.md)。
 

@@ -69,8 +69,9 @@ def verify_python_archives(runtime: Path) -> None:
         for member, entry in archive.toc.items():
             if entry[-1] == "z":
                 modules.update(archive.open_embedded_archive(member).toc)
-        required = ({"httpx._client", "pydantic", "uvicorn"} if name.endswith("backend")
-                    else {"psutil", "qrcode.image.svg"})
+        required = ({"httpx._client", "pydantic", "uvicorn", "app.services.local_json_store"}
+                    if name.endswith("backend")
+                    else {"psutil", "qrcode.image.svg", "app.process_logging"})
         assert required <= modules, f"Missing Python dependencies: {name}"
         forbidden = ("httpx._main", "pygments", "playwright", "pytest")
         assert not any(module == prefix or module.startswith(prefix + ".")
@@ -179,6 +180,9 @@ def verify(bundle: Path) -> None:
                 status = request(control_port, "/api/status")
                 assert status["healthy"] and status["access_enabled"] is False
                 assert status["dashboard"]["metrics"] == []
+                lightweight = request(control_port, "/api/usage-status")
+                assert lightweight["healthy"] and lightweight["access_enabled"] is False
+                assert not {"urls", "log_tail"} & lightweight.keys()
                 main_port = status["port"]
                 assert request(main_port, "/api/v1/health")["version"] == expected
                 with opener.open(f"http://127.0.0.1:{main_port}/dashboard", timeout=5) as response:
@@ -197,12 +201,18 @@ def verify(bundle: Path) -> None:
                 stale = request(main_port, "/api/v1/dashboard/refresh", "POST")
                 assert stale["state"] == "stale" and stale["metrics"] == current["metrics"]
                 assert stale["summary"]["last_success_at"] == current["summary"]["last_success_at"]
+                failed_login = request(main_port, "/api/v1/account-session/login", "POST")
+                assert failed_login["ok"] is False and failed_login["action"] == "resume", failed_login
+                assert failed_login["session"] is None
+                reconnecting = request(main_port, "/api/v1/dashboard")
+                assert reconnecting["state"] == "stale" and reconnecting["metrics"] == current["metrics"]
+                assert reconnecting["summary"]["last_success_at"] == current["summary"]["last_success_at"]
                 offline.clear()
                 assert request(main_port, "/api/v1/dashboard/refresh", "POST")["state"] == "ready"
                 assert request(main_port, "/api/v1/account-session/logout", "POST")["action"] == "logout"
                 assert auth_file.read_text() == auth, "Logout changed external credentials"
                 assert request(main_port, "/api/v1/dashboard")["metrics"] == []
-                print("Packaged OAuth fixture, failed-upstream cache, recovery and logout passed.")
+                print("Packaged OAuth fixture, failed-upstream cache, same-account re-login, recovery and logout passed.")
             finally:
                 try:
                     if ready:
