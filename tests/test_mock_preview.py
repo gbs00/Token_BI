@@ -16,7 +16,7 @@ def test_legacy_mock_flag_fails_closed(monkeypatch):
         get_settings.__wrapped__()
 
 
-def test_mock_entrypoint_never_initializes_real_services_or_changes_accounts(tmp_path):
+def test_mock_entrypoint_never_initializes_real_services_or_changes_accounts(tmp_path, readiness_diagnostics):
     root = Path(__file__).resolve().parents[1]
     config = tmp_path / "config" / "accounts.json"
     config.parent.mkdir()
@@ -30,8 +30,7 @@ def test_mock_entrypoint_never_initializes_real_services_or_changes_accounts(tmp
                                text=True)
     try:
         if not select.select([process.stdout], [], [], 30)[0]:
-            diagnostics.seek(0)
-            pytest.fail(f"preview did not become ready: {diagnostics.read()[-2000:]}")
+            pytest.fail(f"preview did not become ready: {readiness_diagnostics(process, diagnostics)}")
         line = process.stdout.readline().strip()
         assert line.startswith("Sample dashboard: http://127.0.0.1:")
         url = line.removeprefix("Sample dashboard: ").removesuffix("/dashboard")

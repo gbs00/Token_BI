@@ -119,7 +119,7 @@ def test_shutdown_failure_keeps_control_alive_and_allows_retry(runtime, monkeypa
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGSTOP"), reason="requires POSIX process suspension")
-def test_real_control_recovers_hung_owned_backend_and_shuts_down(tmp_path):
+def test_real_control_recovers_hung_owned_backend_and_shuts_down(tmp_path, readiness_diagnostics):
     root = Path(__file__).resolve().parents[1]
     accounts = tmp_path / "config/accounts.json"
     accounts.parent.mkdir()
@@ -152,8 +152,7 @@ def test_real_control_recovers_hung_owned_backend_and_shuts_down(tmp_path):
                 except httpx.TransportError:
                     pass
                 if process.poll() is not None or time.monotonic() >= deadline:
-                    diagnostics.seek(0)
-                    pytest.fail(f"control did not become ready: {diagnostics.read()[-2000:]}")
+                    pytest.fail(f"control did not become ready: {readiness_diagnostics(process, diagnostics)}")
                 time.sleep(0.05)
             result = client.post("/api/start").json()
             assert result["ok"] is True, result

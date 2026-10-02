@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,25 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.config import Settings
 from app.container import ServiceContainer
 from app.main import create_app
+
+
+@pytest.fixture
+def readiness_diagnostics():
+    def collect(process, stream):
+        stream.seek(0)
+        output = stream.read()[-2000:]
+        if sys.platform == "darwin" and process.poll() is None:
+            try:
+                sample = subprocess.run(
+                    ["/usr/bin/sample", str(process.pid), "1", "1"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                graph = sample.stdout.partition("Call graph:")[2]
+                output += "\nProcess stack:\n" + (graph[:6000] or sample.stderr[-1000:])
+            except (OSError, subprocess.TimeoutExpired) as error:
+                output += f"\nStack unavailable: {type(error).__name__}"
+        return output
+    return collect
 
 
 @pytest.fixture
