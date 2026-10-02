@@ -1,10 +1,10 @@
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError
 
 import pytest
 
-from app.local_http import open_local_url
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer, open_local_url
 from scripts import control_panel
 
 
@@ -59,3 +59,14 @@ def test_malformed_main_payload_is_a_recoverable_transport_error(local_server, m
 def test_local_transport_rejects_non_loopback_http(url):
     with pytest.raises(ValueError):
         open_local_url(url, timeout=1)
+
+
+def test_control_binds_without_reverse_dns(monkeypatch):
+    monkeypatch.setattr("socket.getfqdn", lambda *_args: pytest.fail("启动不应依赖反向 DNS"))
+    server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1] > 0
+        assert server.daemon_threads is True
+    finally:
+        server.server_close()

@@ -37,7 +37,7 @@
 `scripts/preview_dashboard.py` 直接渲染正式模板和静态资源，仅提供示例 JSON，不导入生产容器、不读取账号凭据、不启动采集器；刷新按钮只返回示例数据。默认绑定回环，可显式指定 LAN 监听供手机验收：
 
 ```sh
-./.venv/bin/python scripts/preview_dashboard.py --host 0.0.0.0 --port 8899
+./.venv/bin/python -m scripts.preview_dashboard --host 0.0.0.0 --port 8899
 ```
 
 - 双额度：`/dashboard?theme=dark`。

@@ -3,12 +3,14 @@ import argparse
 import json
 import mimetypes
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app/static"

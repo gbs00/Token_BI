@@ -27,7 +27,7 @@ def readiness_diagnostics():
                     ["/usr/bin/sample", str(process.pid), "1", "1"],
                     capture_output=True, text=True, timeout=5,
                 )
-                graph = sample.stdout.partition("Call graph:")[2]
+                graph = sample.stdout.partition("Call graph:")[2].partition("\nBinary Images:")[0]
                 output += "\nProcess stack:\n" + (graph[:6000] or sample.stderr[-1000:])
             except (OSError, subprocess.TimeoutExpired) as error:
                 output += f"\nStack unavailable: {type(error).__name__}"

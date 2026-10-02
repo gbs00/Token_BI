@@ -6,11 +6,12 @@ import subprocess
 import sys
 import time
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from datetime import datetime
 
 import pytest
 
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer
 from app.models.account import AccountRecord, AccountStatus
 from app.services.source_errors import LiveSessionRequiredError
 from app.services.source_errors import (

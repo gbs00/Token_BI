@@ -1,12 +1,14 @@
 """Isolated UI fixtures; never imports the production container or reads credentials."""
 import argparse
 import json
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import qrcode
 import qrcode.image.svg
+
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1] / "desktop"
 

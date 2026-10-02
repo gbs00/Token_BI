@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
@@ -18,7 +18,7 @@ from urllib.request import Request
 from app.app_paths import resolve_app_data_dir, resolve_project_root
 from app.process_lifecycle import stop_owned_process, owns_dev_service
 from app.http_access import allows_local_management
-from app.local_http import open_local_url
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer, open_local_url
 from app.process_logging import capture_process_output, open_process_log
 import psutil
 

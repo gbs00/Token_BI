@@ -9,12 +9,13 @@ import sys
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
+from app.local_http import LocalHTTPServer as ThreadingHTTPServer
 from app.services.usage_connectors import normalize_usage_payload
 
 ROOT = Path(__file__).resolve().parents[1]
