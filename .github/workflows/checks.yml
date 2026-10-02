@@ -17,7 +17,6 @@ jobs:
   regression:
     runs-on: macos-15
     env:
-      TOKEN_BI_APP_DATA_DIR: ${{ runner.temp }}/token-bi-checks
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +28,8 @@ jobs:
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure isolated application data
+        run: printf 'TOKEN_BI_APP_DATA_DIR=%s/token-bi-checks\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install development dependencies
         run: |
           test "$(uname -m)" = arm64
