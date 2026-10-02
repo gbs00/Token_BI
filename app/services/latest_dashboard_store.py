@@ -49,8 +49,9 @@ class LatestDashboardStore:
                     self._clear_unlocked()
                     return None
                 stored_identity = str(raw.get("account_masked_email") or "").strip()
-                if (stored_identity != account.masked_email
-                        or raw.get("account_identity_key") != account.identity_key):
+                if (raw.get("account_identity_key") != account.identity_key
+                        or (not account.identity_key
+                            and mask_identity(stored_identity) != mask_identity(account.masked_email))):
                     self._clear_unlocked()
                     return None
                 try:

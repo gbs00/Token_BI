@@ -3,10 +3,13 @@ import plistlib
 import re
 import socket
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.main import create_app
 from app import __version__
-from app.cli import build_parser, create_dual_stack_listener
+from app.cli import build_parser, create_dual_stack_listener, run_main_server
 from scripts import control_panel
 
 
@@ -19,6 +22,24 @@ def test_cli_has_main_server_command():
     assert args.command == "main-server"
     assert args.host == "0.0.0.0"
     assert args.port == 8787
+
+
+@pytest.mark.parametrize("dual_stack", [False, True])
+def test_main_server_disables_access_logs_for_frequent_cached_reads(monkeypatch, dual_stack):
+    import uvicorn
+    import app.cli
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(uvicorn, "Config", lambda *args, **kwargs: calls.append(kwargs) or kwargs)
+    monkeypatch.setattr(uvicorn, "Server", lambda config: SimpleNamespace(run=lambda **kwargs: None))
+    monkeypatch.setattr(app.cli.socket, "has_ipv6", True)
+    monkeypatch.setattr(app.cli, "create_dual_stack_listener", lambda port: SimpleNamespace(close=lambda: None))
+
+    run_main_server(object(), "0.0.0.0" if dual_stack else "127.0.0.1", 8787)
+
+    assert len(calls) == 1
+    assert calls[0]["access_log"] is False
 
 
 def test_dual_stack_listener_accepts_ipv4_and_ipv6() -> None:

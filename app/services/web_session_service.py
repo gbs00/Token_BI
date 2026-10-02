@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from app.config import Settings
 from app.models.account import AccountRecord
 from app.models.browser_session import BrowserSessionSnapshot, BrowserSessionState
+from app.services.local_json_store import quarantine_json, write_private_json
 from app.services.source_errors import AnalyticsPageChangedError, LiveSessionRequiredError, ScraperUnavailableError
 
 
@@ -145,15 +146,18 @@ class WebSessionService:
     def _profile(self, create: bool) -> str:
         if self._profile_path.exists():
             try:
-                return str(uuid.UUID(json.loads(self._profile_path.read_text())["profile"]))
+                raw = json.loads(self._profile_path.read_text())
+                if not isinstance(raw, dict) or not isinstance(raw.get("profile"), str):
+                    raise ValueError("Invalid web session profile")
+                return str(uuid.UUID(raw["profile"]))
             except (ValueError, KeyError, OSError, TypeError):
-                raise AnalyticsPageChangedError("网页会话配置无法读取，请重新连接账号。")
+                if not create:
+                    raise AnalyticsPageChangedError("网页会话配置无法读取，请重新连接账号。")
+                quarantine_json(self._profile_path)
         if not create:
             raise LiveSessionRequiredError("尚未建立 Token BI 网页会话，请在 Mac 端登录。")
         value = str(uuid.uuid4())
-        descriptor = os.open(self._profile_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(descriptor, "w") as handle:
-            json.dump({"profile": value}, handle)
+        write_private_json(self._profile_path, {"profile": value})
         return value
 
     def _get_bridge(self, *, login: bool = False) -> NativeWebSession:

@@ -21,7 +21,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path)
         if path.path == "/api/app/health":
             return self.respond({"ok": True, "service": "token-bi-control-panel", "preview": True})
-        if path.path == "/api/status":
+        if path.path in {"/api/status", "/api/usage-status"}:
             now = datetime.now(timezone.utc)
             account = {"masked_email": "demo****@example.com", "status": "active", "account_id": "native-preview"}
             return self.respond({"healthy": True, "running": True, "account": account, "urls": {

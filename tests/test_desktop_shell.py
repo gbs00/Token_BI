@@ -45,7 +45,7 @@ def panel(request):
             if(command==='update_action') {
               window.updateState={...window.updateState,phase:{check:'checking',download:'downloading',install:'installing'}[args.action]};
             }
-            if(command==='panel_action' && args.action==='status') return window.payload;
+            if(command==='panel_action' && ['status','details'].includes(args.action)) return window.payload;
             if(command==='panel_action' && args.action==='refresh') return {ok:false,message:'网络超时'};
             if(command==='panel_action' && args.action?.startsWith('qr_')) return window.qrPayloads[args.action.slice(3)];
             if(command==='panel_action' && args.action==='logout') window.payload={healthy:true,access_enabled:false};
@@ -71,6 +71,39 @@ def test_failed_refresh_keeps_quota_and_never_claims_success(panel):
     assert "网络超时" in panel.locator("#feedback").inner_text()
     assert "额度已同步" not in panel.locator("#feedback").inner_text()
     assert panel.locator(".metric").count() == 1
+
+
+def test_home_reads_light_status_and_diagnostics_fetches_details_on_demand(panel):
+    panel.add_init_script("""
+      const invoke = window.__TAURI__.core.invoke;
+      window.payload.log_tail = 'diagnostic log fixture';
+      window.__TAURI__.core.invoke = async (command, args = {}) => {
+        const result = await invoke(command, args);
+        if (command === 'panel_action' && args.action === 'status') {
+          const {urls, log_tail, ...light} = result; return light;
+        }
+        return result;
+      };
+    """)
+    panel.goto("http://tokenbi.test/index.html")
+    panel.locator(".metric").wait_for()
+    assert panel.evaluate("calls.filter(c => c[1] === 'details').length") == 0
+
+    panel.locator('[data-action="settings"]').click()
+    panel.locator('[data-action="diagnostics"]').click()
+    panel.wait_for_function("document.getElementById('log').textContent === 'diagnostic log fixture'")
+
+    assert panel.evaluate("calls.filter(c => c[1] === 'details').length") == 1
+    assert panel.locator("#diag-health").inner_text() == "运行中"
+
+
+def test_corrupt_account_recovery_shows_login_without_old_metrics(panel):
+    panel.add_init_script("""window.payload = {healthy:true,access_enabled:false,account:null,
+      dashboard:{state:'empty',metrics:[],message:'账号配置无法读取，已隔离原文件。请在 Mac 端点击登录账号重新连接。'}};""")
+    panel.goto("http://tokenbi.test/index.html")
+    assert "账号配置无法读取" in panel.locator("#empty-copy").inner_text()
+    assert panel.locator("#login").is_visible()
+    assert panel.locator(".metric").count() == 0
 
 
 @pytest.mark.parametrize("panel", [1, 2], indirect=True)

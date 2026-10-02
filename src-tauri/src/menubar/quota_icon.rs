@@ -196,7 +196,7 @@ mod runtime {
                     let result = async {
                         desktop
                             .client
-                            .get(format!("{CONTROL_URL}api/status"))
+                            .get(format!("{CONTROL_URL}api/usage-status"))
                             .timeout(Duration::from_secs(6))
                             .send()
                             .await?

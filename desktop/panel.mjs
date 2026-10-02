@@ -37,7 +37,8 @@ function render() {
   $('login').hidden = boot.phase !== 'ready' || (model.authenticated && !loginNeeded);
   $('empty-title').textContent = boot.phase === 'starting' ? '正在连接本地服务' : boot.phase === 'error' ? '本地服务暂不可用'
     : !model.authenticated ? '未检测到可用账号' : '等待额度数据';
-  $('empty-copy').textContent = boot.phase !== 'ready' ? '' : !model.authenticated ? '登录后即可查看 Codex 使用额度' : '等待下一次同步';
+  $('empty-copy').textContent = boot.phase !== 'ready' ? '' : !model.authenticated
+    ? model.message || '登录后即可查看 Codex 使用额度' : '等待下一次同步';
   const cards = model.metrics.map(metric => {
     const article = document.createElement('article');
     article.className = `metric tier-${tier(metric.remaining_pct)}`;
@@ -130,6 +131,7 @@ function navigate(next) {
   $('view-title').textContent = { qr:'连接副屏', settings:'设置', diagnostics:'诊断信息' }[view] || '';
   document.querySelector('.scroll-body').scrollTop = 0;
   if (view === 'qr') void updateQR();
+  if (boot.phase === 'ready' && !busy) { nextRead = Date.now() + 15000; void readStatus(); }
 }
 async function updateQR(force = false) {
   const target = status?.urls?.[kind] || '';
@@ -159,7 +161,7 @@ async function updateQR(force = false) {
 async function readStatus() {
   const sequence = ++serial;
   try {
-    const next = await request('status');
+    const next = await request(['qr', 'diagnostics'].includes(view) ? 'details' : 'status');
     if (sequence !== serial) return;
     if (!next.healthy && next.access_enabled !== false && status?.dashboard &&
         next.account?.account_id && next.account.account_id === status.dashboard.account?.account_id) {

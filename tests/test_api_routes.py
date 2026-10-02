@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.models.account import AccountRecord, AccountStatus
 from app.models.browser_session import BrowserSessionSnapshot, BrowserSessionState
-from app.services.usage_connectors import UsageConnectorResult
+from app.services.usage_connectors import ConnectorNetworkError, UsageConnectorResult
 
 
 def local_client(app):
@@ -235,6 +235,34 @@ def test_account_session_login_reuses_single_existing_account(app) -> None:
     assert response.status_code == 200
     assert response.json()["account"]["account_id"] == existing["account_id"]
     assert len(app.state.container.account_service.list_accounts()) == 1
+
+
+@pytest.mark.parametrize("action", ["login", "reauth"])
+def test_same_account_login_failure_keeps_cached_quota(app, monkeypatch, action):
+    account_id = _create_account_with_context(app)
+    container = app.state.container
+    ready = container.usage_sync_coordinator.refresh(account_id)
+    saved = container.latest_dashboard_store.snapshot_path.read_bytes()
+
+    def offline(_account):
+        raise ConnectorNetworkError("offline fixture")
+
+    monkeypatch.setattr(container.usage_connector_manager, "fetch_usage", offline)
+    monkeypatch.setattr(container.usage_connector_manager.connectors[1], "cli_available", lambda: True)
+    monkeypatch.setattr(container.web_session_service, "start_login_session",
+                        lambda account_id, context_dir, **kwargs: BrowserSessionSnapshot(
+                            account_id=account_id, context_dir=str(context_dir),
+                            state=BrowserSessionState.ERROR,
+                        ))
+    endpoint = "/api/v1/account-session/login" if action == "login" else f"/api/v1/accounts/{account_id}/reauth"
+
+    response = local_client(app).post(endpoint)
+    failed = container.usage_sync_coordinator.refresh(account_id)
+
+    assert response.status_code == 200
+    assert failed.state.value == "stale"
+    assert failed.metrics == ready.metrics
+    assert container.latest_dashboard_store.snapshot_path.read_bytes() == saved
 
 
 @pytest.mark.parametrize("state,opens_web", [("source_changed", True), ("reauth_required", True),

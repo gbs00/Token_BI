@@ -28,6 +28,71 @@ def test_status_poll_only_reads_runtime_endpoint(monkeypatch) -> None:
     assert not {"guide", "chrome_available", "diagnostics", "data_source_status"} & payload.keys()
 
 
+def test_usage_status_poll_does_not_probe_network_or_read_logs(monkeypatch) -> None:
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append(path)
+        return {"service": control_panel.MAIN_SERVICE_MARKER, "access_enabled": True,
+                "account": {"account_id": "fixture", "masked_email": "user****@example.test", "status": "active"},
+                "dashboard": {"state": "ready", "metrics": [{"remaining_pct": 82}]}}
+    def forbidden(*args, **kwargs):
+        pytest.fail("额度轮询不得查询局域网地址或读取运行日志")
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "123"))
+    monkeypatch.setattr(control_panel, "_main_api_request", request)
+    monkeypatch.setattr(control_panel, "_dashboard_urls", forbidden)
+    monkeypatch.setattr(control_panel, "_tail_log", forbidden)
+    monkeypatch.setattr(control_panel.subprocess, "run", forbidden)
+
+    for _ in range(6):
+        payload = control_panel._status_payload(include_details=False)
+        assert payload["healthy"] is True
+        assert payload["dashboard"]["metrics"][0]["remaining_pct"] == 82
+        assert not {"urls", "log_tail"} & payload.keys()
+    assert calls == ["/api/v1/runtime-status"] * 6
+
+
+def test_network_probe_timeout_is_bounded_and_recoverable(monkeypatch) -> None:
+    def timeout(command, **kwargs):
+        assert kwargs["timeout"] == 1
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+    monkeypatch.setattr(control_panel.subprocess, "run", timeout)
+    assert control_panel._command_stdout(["route", "-n", "get", "default"]) == ""
+
+
+def test_usage_status_http_endpoint_keeps_local_management_guard(monkeypatch):
+    monkeypatch.setattr(control_panel, "_main_server_running", lambda: (True, "123"))
+    monkeypatch.setattr(control_panel, "_main_runtime_status", lambda: {
+        "service": control_panel.MAIN_SERVICE_MARKER, "account": None,
+        "dashboard": {"state": "empty", "metrics": []},
+    })
+    monkeypatch.setattr(control_panel, "_dashboard_urls", lambda: pytest.fail("轻量接口不应读取地址"))
+    monkeypatch.setattr(control_panel, "_tail_log", lambda: pytest.fail("轻量接口不应读取日志"))
+    server = control_panel.ThreadingHTTPServer(("127.0.0.1", 0), control_panel.ControlPanelHandler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with httpx.Client(trust_env=False) as client:
+            url = f"http://127.0.0.1:{server.server_port}/api/usage-status"
+            response = client.get(url)
+            assert response.status_code == 200
+            assert response.json()["healthy"] is True
+            assert not {"urls", "log_tail"} & response.json().keys()
+            assert client.get(url, headers={"Origin": "https://untrusted.example"}).status_code == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
+@pytest.mark.parametrize("broken", ["{", "[]", '{"accounts": null}', '{"accounts": [null]}'])
+def test_control_account_fallback_tolerates_corrupt_metadata(monkeypatch, tmp_path, broken):
+    path = tmp_path / "accounts.json"
+    path.write_text(broken, encoding="utf-8")
+    monkeypatch.setattr(control_panel, "ACCOUNTS_FILE", path)
+    assert control_panel._preferred_account() is None
+    assert path.read_text() == broken
+
+
 def test_log_tail_reads_bounded_suffix(monkeypatch, tmp_path) -> None:
     data = ("旧日志\n" * 100000 + "\n".join(f"新日志 {i}" for i in range(30)) + "\n").encode()
     log = tmp_path / "server.log"
@@ -136,6 +201,7 @@ def test_start_main_server_cleans_runtime_files_when_readiness_fails(monkeypatch
 
     class FakeProcess:
         pid = 12345
+        stdout = io.BytesIO()
 
     monkeypatch.setattr(control_panel, "PID_FILE", pid_file)
     monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", runtime_file)
@@ -165,6 +231,7 @@ def test_packaged_main_server_resets_pyinstaller_environment(monkeypatch, tmp_pa
 
     class FakeProcess:
         pid = 12345
+        stdout = io.BytesIO()
 
     def fake_popen(*args, **kwargs):
         captured["env"] = kwargs["env"]

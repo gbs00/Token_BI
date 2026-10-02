@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from app.config import Settings
 from app.models.account import AccountRecord, AccountStatus, CreateAccountRequest
+from app.services.local_json_store import quarantine_json, write_private_json
 
 
 class AccountService:
@@ -19,40 +20,58 @@ class AccountService:
 
     def _ensure_accounts_file(self) -> None:
         if not self._settings.accounts_file.exists():
-            self._settings.accounts_file.write_text('{"accounts": []}\n', encoding="utf-8")
+            self._write_payload({"accounts": []})
+
+    def _read_payload(self) -> dict:
+        with self._lock:
+            try:
+                raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict) or not isinstance(raw.get("accounts"), list):
+                    raise ValueError("Invalid account metadata")
+                for item in raw["accounts"]:
+                    AccountRecord.model_validate(item)
+                revision = raw.get("access_revision", 0)
+                if type(revision) is not int or revision < 0:
+                    raise ValueError("Invalid access revision")
+                if type(raw.get("access_enabled", True)) is not bool:
+                    raise ValueError("Invalid access state")
+                return raw
+            except (ValueError, TypeError, FileNotFoundError):
+                quarantine_json(self._settings.accounts_file)
+                # 损坏时不自动恢复授权；新代次阻止旧采集结果越过恢复边界。
+                recovered = {"accounts": [], "access_enabled": False,
+                             "access_revision": time.time_ns(), "recovery_required": True}
+                self._write_payload(recovered)
+                return recovered
 
     def _read_accounts(self) -> list[AccountRecord]:
-        raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+        raw = self._read_payload()
         return [AccountRecord.model_validate(item) for item in raw.get("accounts", [])]
 
     def _write_accounts(self, accounts: list[AccountRecord]) -> None:
-        payload = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+        payload = self._read_payload()
         payload["accounts"] = [account.model_dump(mode="json") for account in accounts]
         self._write_payload(payload)
 
     def _write_payload(self, payload: dict) -> None:
-        path = self._settings.accounts_file
-        temporary = path.with_suffix(".json.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        write_private_json(self._settings.accounts_file, payload)
+
+    @property
+    def recovery_required(self) -> bool:
+        return self._read_payload().get("recovery_required") is True
 
     def access_state(self) -> tuple[bool, int]:
         with self._lock:
-            raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+            raw = self._read_payload()
             return raw.get("access_enabled", True) is True, int(raw.get("access_revision", 0))
 
     def set_access_enabled(self, enabled: bool) -> None:
         with self._lock:
-            raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
+            raw = self._read_payload()
             raw["access_enabled"] = enabled
             raw["access_revision"] = int(raw.get("access_revision", 0)) + 1
+            if enabled:
+                raw.pop("recovery_required", None)
             self._write_payload(raw)
 
     def commit_synced_account(

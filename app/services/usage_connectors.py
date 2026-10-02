@@ -1075,6 +1075,9 @@ def mask_identity(value: str) -> str:
     local, _, domain = normalized.partition("@")
     if not local or not domain:
         return normalized if len(normalized) <= 4 else f"{normalized[:4]}..."
+    masked = re.fullmatch(r"([^*]{1,4})\*{4,7}", local)
+    if masked:
+        return f"{masked.group(1)}****@{domain}"
     keep = min(4, max(1, len(local)))
     return f"{local[:keep]}****@{domain}"
 

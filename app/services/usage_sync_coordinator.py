@@ -184,7 +184,21 @@ class UsageSyncCoordinator:
     def resume(self) -> None:
         with self._state_lock:
             self._usage_service.set_access_enabled(True)
-            self.clear()
+            self._generation += 1
+            self._consecutive_failures = 0
+            current = self.get_dashboard()
+            if current.metrics:
+                current = current.model_copy(update={
+                    "state": PageState.STALE,
+                    "message": "正在重新连接账号，当前展示上次成功数据。",
+                })
+            self._current = self._with_schedule(
+                current,
+                last_attempt_at=current.summary.last_attempt_at,
+                last_success_at=current.summary.last_success_at,
+                next_sync_at=self._now(),
+            )
+        self._schedule_changed.set()
 
     def web_event(self, event: str) -> None:
         if not self._usage_service.access_state()[0]:

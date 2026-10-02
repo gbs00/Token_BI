@@ -19,7 +19,7 @@ export function createPreview(scenario) {
     if (command === 'panel_hide' || command === 'panel_quit') return;
     if (command !== 'panel_action') throw new Error('Unknown preview command');
     const action = args.action;
-    if (action === 'status') return status();
+    if (action === 'status' || action === 'details') return status();
     if (action === 'logout') signedIn = false;
     if (action === 'login') signedIn = true;
     if (action === 'refresh') failed = false;

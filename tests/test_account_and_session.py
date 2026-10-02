@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+import stat
 
+import pytest
+
+from app.container import ServiceContainer
 from app.models.account import AccountRecord, AccountStatus
 from app.models.account import CreateAccountRequest
 
@@ -16,6 +21,42 @@ def test_create_account_persists_record(container) -> None:
     assert stored.account_alias == "guo****@gmail.com"
     assert stored.masked_email == "guo****@gmail.com"
     assert stored.status.value == "pending"
+
+
+@pytest.mark.parametrize("broken", ["{", "[]", '{"accounts": [null]}',
+                                    '{"accounts": [], "access_revision": "bad"}'])
+def test_corrupt_account_metadata_recovers_without_automatic_access(test_settings, broken) -> None:
+    test_settings.accounts_file.write_text(broken, encoding="utf-8")
+    external_auth = test_settings.codex_auth_paths[0]
+    external_auth.write_text("external-credential-fixture", encoding="utf-8")
+    recovered = ServiceContainer(test_settings)
+    try:
+        assert recovered.account_service.access_state()[0] is False
+        assert recovered.account_service.list_accounts() == []
+        assert "配置" in recovered.usage_sync_coordinator.get_dashboard().message
+        backups = list(test_settings.config_dir.glob("accounts.json.corrupt-*"))
+        assert len(backups) == 1
+        assert backups[0].read_text() == broken
+        assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+        assert external_auth.read_text() == "external-credential-fixture"
+        assert json.loads(test_settings.accounts_file.read_text())["access_enabled"] is False
+
+        recovered.usage_sync_coordinator.resume()
+        assert recovered.account_service.access_state()[0] is True
+        assert "recovery_required" not in json.loads(test_settings.accounts_file.read_text())
+    finally:
+        recovered.shutdown()
+
+
+def test_account_file_corruption_invalidates_inflight_revision(container) -> None:
+    service = container.account_service
+    before = service.access_state()[1]
+    container.settings.accounts_file.write_text("{", encoding="utf-8")
+
+    assert service.access_state()[0] is False
+    service.set_access_enabled(True)
+
+    assert service.access_state()[1] > before + 1
 
 
 def test_delete_account_only_removes_binding_and_preserves_legacy_profile(container) -> None:

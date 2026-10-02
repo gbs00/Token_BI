@@ -365,7 +365,8 @@ fn panel_state(
 
 fn action_route(action: &str) -> Result<(&'static str, &'static str), String> {
     match action {
-        "status" => Ok(("GET", "api/status")),
+        "status" => Ok(("GET", "api/usage-status")),
+        "details" => Ok(("GET", "api/status")),
         "refresh" => Ok(("POST", "api/refresh-status")),
         "login" => Ok(("POST", "api/add-account")),
         "logout" => Ok(("POST", "api/logout")),
@@ -398,7 +399,7 @@ async fn panel_action(
         return Err("本地服务尚未就绪".into());
     }
     #[cfg(target_os = "macos")]
-    let revision = (action == "status").then(|| quota_icon::begin(&app));
+    let revision = matches!(action.as_str(), "status" | "details").then(|| quota_icon::begin(&app));
     let response = async {
         state
             .client
@@ -485,6 +486,8 @@ mod tests {
     fn bridge_only_exposes_explicit_actions() {
         assert!(action_route("http://example.com").is_err());
         assert!(action_route("stop").is_err());
+        assert_eq!(action_route("status").unwrap(), ("GET", "api/usage-status"));
+        assert_eq!(action_route("details").unwrap(), ("GET", "api/status"));
         assert_eq!(action_route("logout").unwrap(), ("POST", "api/logout"));
         assert_eq!(
             action_route("qr_lan").unwrap(),

@@ -1,4 +1,5 @@
 """Fault injection for owned process recovery and updater shutdown handoff."""
+import io
 import os
 import signal
 import socket
@@ -64,7 +65,7 @@ def test_retry_recovers_unhealthy_service_only_after_owned_stop(runtime, monkeyp
     monkeypatch.setattr(runtime, "_select_main_port", lambda *_args: 9876)
     monkeypatch.setattr(runtime, "_backend_command", lambda _args: ["fake-backend"])
     monkeypatch.setattr(runtime.subprocess, "Popen", lambda *_args, **_kwargs:
-                        events.append(("start", "23456")) or SimpleNamespace(pid=23456))
+                        events.append(("start", "23456")) or SimpleNamespace(pid=23456, stdout=io.BytesIO()))
     monkeypatch.setattr(runtime, "_wait_for_main_server", lambda **_kwargs: True)
     assert runtime._start_main_server_process()[0] is can_stop
     assert events == ([("stop", "12345"), ("start", "23456")] if can_stop else [("stop", "12345")])
@@ -81,7 +82,7 @@ def test_start_timeout_retains_process_ownership_if_cleanup_fails(runtime, monke
     monkeypatch.setattr(runtime, "_main_server_running", lambda: (False, None))
     monkeypatch.setattr(runtime, "_select_main_port", lambda *_args: 9876)
     monkeypatch.setattr(runtime, "_backend_command", lambda _args: ["fake-backend"])
-    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=23456))
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=23456, stdout=io.BytesIO()))
     monkeypatch.setattr(runtime, "_wait_for_main_server", lambda **_kwargs: False)
     monkeypatch.setattr(runtime, "_stop_pid", lambda _pid: False)
     assert runtime._start_main_server_process()[0] is False

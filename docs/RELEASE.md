@@ -18,6 +18,8 @@ TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWOR
 
 脚本使用临时数据目录，执行 Python、JS、Rust 测试与 Clippy / 格式 / 依赖检查；然后完整构建 control、backend、shell，验证 App 深度签名、当前版本 DMG 和真实签名更新归档。安装测试只替换临时副本，不替换本地安装、不上传。
 
+`checks.yml` 在 PR 和 main 推送时独立执行回归，不使用更新签名私钥，不打包上传 Release。所有数据使用 runner 临时目录；原生测试仅使用隔离的本机 HTTP fixture。工作流文件的本地检查不等于 GitHub runner 已验收，首次远端运行仍需回读结果。
+
 `token-bi.spec` 是两个 Python 服务唯一的打包入口，使用共享 `COLLECT` 生成 `dist/token-bi-runtime`。App 内两个服务各自运行，但 Python framework、标准库和扩展库统一存放于 `Resources/token-bi-runtime/_internal`；不再生成或引用两套独立运行库。服务模块仍按各自入口收集，控制服务不会因此预加载额度采集逻辑。Rust 发布构建与启动器裁剪符号表，HTTPX 仅排除可选命令行入口和代码高亮库，不移除 HTTP 客户端。
 
 产物：
@@ -62,3 +64,5 @@ Apple 签名/公证、Intel/Universal、干净机器安装、真实运行版本 
 ## 本地产物保留
 
 `npm run workspace:clean` 默认预览，核对后执行 `npm run workspace:clean -- --apply`。保留最新两份 App 备份、最近两个版本发布暂存和当前 `target.noindex`；只清理已退役的 `target` 与不再引用、无占用且至少 30 天无修改的开发浏览器配置。清理记录位于 `dist/cleanup-reports`，不随 App 发布。该命令不在用户 App 启动或更新时自动执行，也不删除远端 Release。
+
+后台运行日志保留 `server.log` 及 `.1`、`.2`，每份最多 5 MiB；升级时只裁剪这些已知日志的超限内容。正常 HTTP 访问不写日志，启动异常、同步错误和标准错误仍保留。账号配置损坏时原文件以 `.corrupt-<随机标识>` 隔离，权限 0600，接入暂停至用户点击登录；不自动删除这些恢复证据或外部 Codex/WebKit 凭据。

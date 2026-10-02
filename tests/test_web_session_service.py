@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.source_errors import LiveSessionRequiredError
+from app.services.source_errors import AnalyticsPageChangedError, LiveSessionRequiredError
 from app.services.web_session_service import NativeWebSession, WebSessionService
 from app.services.usage_connectors import normalize_usage_payload
 from test_wkwebview_probe import server  # noqa: F401
@@ -49,6 +49,25 @@ def test_background_read_never_creates_login_profile(test_settings):
     with pytest.raises(LiveSessionRequiredError):
         service._profile(create=False)
     assert not service._profile_path.exists()
+
+
+@pytest.mark.parametrize("broken", ["{", "[]", '{"profile": "bad"}', '{"profile": 42}'])
+def test_corrupt_profile_requires_explicit_login_then_recovers(test_settings, broken):
+    service = WebSessionService(test_settings)
+    service._profile_path.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(AnalyticsPageChangedError):
+        service._profile(create=False)
+    assert service._profile_path.read_text() == broken
+
+    profile = service._profile(create=True)
+    assert str(uuid.UUID(profile)) == profile
+    assert service._profile(create=False) == profile
+    backups = list(test_settings.runtime_dir.glob("web-session.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text() == broken
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert not list(test_settings.runtime_dir.glob("*.tmp"))
 
 
 def test_shutdown_blocks_late_fallback(test_settings):

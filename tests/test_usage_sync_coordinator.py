@@ -19,6 +19,7 @@ from app.services.usage_connectors import (
     ConnectorNetworkError,
     UsageConnectorManager,
     UsageConnectorResult,
+    mask_identity,
 )
 from app.services.usage_service import UsageService
 from app.services.usage_sync_coordinator import UsageSyncCoordinator
@@ -175,6 +176,67 @@ def test_restart_restores_last_success_without_upstream_call(container) -> None:
     assert payload.state == PageState.STALE
     assert [metric.remaining_pct for metric in payload.metrics] == [82, 97]
     assert store.snapshot_path.exists()
+
+
+def test_same_account_resume_preserves_success_when_offline(container) -> None:
+    account = _create_active_account(container)
+    coordinator, manager, store = _build_coordinator(container)
+    ready = coordinator.refresh(account.account_id)
+    stored = store.snapshot_path.read_bytes()
+    manager.failure = _failure(ConnectorFailureCategory.NETWORK_ERROR)
+
+    coordinator.resume()
+    pending = coordinator.get_dashboard(account.account_id)
+    failed = coordinator.refresh(account.account_id)
+
+    assert pending.state == PageState.STALE
+    assert pending.metrics == failed.metrics == ready.metrics
+    assert failed.state == PageState.STALE
+    assert failed.summary.last_success_at == ready.summary.last_success_at
+    assert store.snapshot_path.read_bytes() == stored
+
+
+@pytest.mark.parametrize("local_part", ["a", "ab", "abc"])
+def test_short_email_snapshot_survives_restart(container, local_part) -> None:
+    account = container.account_service.create_account(
+        CreateAccountRequest(masked_email=mask_identity(f"{local_part}@example.test"))
+    )
+    manager = ControlledConnectorManager()
+    manager.identity = account.masked_email
+    coordinator, _, store = _build_coordinator(container, manager)
+    ready = coordinator.refresh(account.account_id)
+
+    restored, _, _ = _build_coordinator(container, manager)
+
+    assert restored.get_dashboard().metrics == ready.metrics
+    assert store.snapshot_path.exists()
+
+
+def test_snapshot_identity_key_not_display_mask_controls_restore(container) -> None:
+    account = _create_active_account(container).model_copy(update={"identity_key": "a" * 64})
+    container.account_service._write_accounts([account])
+    coordinator, _, store = _build_coordinator(container)
+    ready = coordinator.refresh().model_copy(update={"account": account})
+    store.save(ready)
+    renamed = account.model_copy(update={"masked_email": "u****@example.com"})
+
+    assert store.load(renamed).metrics == ready.metrics
+    assert store.load(renamed.model_copy(update={"identity_key": "b" * 64})) is None
+    assert not store.snapshot_path.exists()
+
+
+def test_legacy_double_masked_snapshot_restores_without_mixing_accounts(container) -> None:
+    account = container.account_service.create_account(CreateAccountRequest(masked_email="a****@example.test"))
+    manager = ControlledConnectorManager()
+    manager.identity = account.masked_email
+    coordinator, _, store = _build_coordinator(container, manager)
+    ready = coordinator.refresh(account.account_id)
+    stored = json.loads(store.snapshot_path.read_text())
+    stored["account_masked_email"] = "a*******@example.test"
+    store.snapshot_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert store.load(ready.account).metrics == ready.metrics
+    assert store.load(ready.account.model_copy(update={"masked_email": "b****@example.test"})) is None
 
 
 def test_identity_mismatch_discards_persisted_snapshot(container) -> None:

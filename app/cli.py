@@ -28,14 +28,14 @@ def run_main_server(fastapi_app, host: str, port: int) -> None:
             # IPv6 不可用时交还给 Uvicorn 执行原有 IPv4 启动和错误报告。
             pass
         else:
-            config = uvicorn.Config(fastapi_app, host=host, port=port, loop="asyncio")
+            config = uvicorn.Config(fastapi_app, host=host, port=port, loop="asyncio", access_log=False)
             try:
                 uvicorn.Server(config).run(sockets=[listener])
             finally:
                 listener.close()
             return
 
-    uvicorn.run(fastapi_app, host=host, port=port, loop="asyncio")
+    uvicorn.run(fastapi_app, host=host, port=port, loop="asyncio", access_log=False)
 
 
 def build_parser() -> argparse.ArgumentParser:

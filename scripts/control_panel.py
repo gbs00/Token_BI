@@ -19,6 +19,7 @@ from app.app_paths import resolve_app_data_dir, resolve_project_root
 from app.process_lifecycle import stop_owned_process, owns_dev_service
 from app.http_access import allows_local_management
 from app.local_http import open_local_url
+from app.process_logging import capture_process_output, open_process_log
 import psutil
 
 
@@ -29,8 +30,9 @@ def _command_stdout(command: list[str]) -> str:
             capture_output=True,
             text=True,
             check=False,
+            timeout=1,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip()
 
@@ -57,6 +59,7 @@ PID_FILE = RUNTIME_DIR / "token_bi.pid"
 RUNTIME_STATE_FILE = RUNTIME_DIR / "token_bi_runtime.json"
 LOCAL_HOSTNAME = _system_local_hostname()
 _dashboard_url_cache: tuple[float, int, dict[str, str]] | None = None
+_server_log_thread: threading.Thread | None = None
 
 ACCOUNTS_FILE = APP_DATA_DIR / "config" / "accounts.json"
 
@@ -66,9 +69,12 @@ def _read_accounts() -> list[dict]:
         return []
     try:
         payload = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (ValueError, OSError):
         return []
-    return payload.get("accounts", []) if payload.get("access_enabled", True) else []
+    if not isinstance(payload, dict) or not payload.get("access_enabled", True):
+        return []
+    accounts = payload.get("accounts", [])
+    return [item for item in accounts if isinstance(item, dict)] if isinstance(accounts, list) else []
 
 
 def _preferred_account() -> dict | None:
@@ -357,6 +363,7 @@ def _start_main_server_process() -> tuple[bool, str]:
 
 
 def _start_main_server_locked() -> tuple[bool, str]:
+    global _server_log_thread
     if _shutdown_requested.is_set():
         return False, "Token BI 正在退出，无法启动服务。"
     running, pid = _main_server_running()
@@ -394,18 +401,25 @@ def _start_main_server_locked() -> tuple[bool, str]:
         ]
     )
 
+    if _server_log_thread is not None:
+        _server_log_thread.join(timeout=1)
+        if _server_log_thread.is_alive():
+            return False, "上次运行日志尚未收尾，请稍后重试。"
+    log_handler = None
     try:
-        log_handle = (LOG_DIR / "server.log").open("ab")
+        log_handler = open_process_log(LOG_DIR / "server.log")
         process = subprocess.Popen(
             command,
             cwd=str(PROJECT_ROOT),
             env=env,
-            stdout=log_handle,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        log_handle.close()
+        _server_log_thread = capture_process_output(process.stdout, log_handler)
     except OSError as exc:
+        if log_handler is not None:
+            log_handler.close()
         return False, str(exc)
 
     PID_FILE.write_text(str(process.pid), encoding="utf-8")
@@ -437,6 +451,8 @@ def _stop_main_server_locked() -> tuple[bool, str]:
             messages.append(f"Token BI stopped (PID {existing_pid}).")
     if had_runtime and not _port_available(_current_main_port()):
         return False, "主服务端口仍被占用，未确认完全停止；请检查后重试。"
+    if _server_log_thread is not None:
+        _server_log_thread.join(timeout=1)
     PID_FILE.unlink(missing_ok=True)
     if stopped:
         _clear_runtime_state()
@@ -638,7 +654,7 @@ def _error_payload(code: str, details: str | None = None) -> dict:
     }
 
 
-def _status_payload() -> dict:
+def _status_payload(*, include_details: bool = True) -> dict:
     running, pid = _main_server_running()
     runtime_status = {}
     health_error = None
@@ -650,8 +666,7 @@ def _status_payload() -> dict:
             runtime_status = {"account": _preferred_account()}
     healthy = running and runtime_status.get("service") == MAIN_SERVICE_MARKER
     account = _status_account(running, runtime_status)
-    urls = _dashboard_urls()
-    return {
+    payload = {
         "running": running,
         "healthy": healthy,
         "health_error": health_error,
@@ -662,7 +677,6 @@ def _status_payload() -> dict:
         "hostname": LOCAL_HOSTNAME,
         "packaged": bool(getattr(sys, "frozen", False)),
         "app_data_dir": str(APP_DATA_DIR),
-        "urls": urls,
         "usage": runtime_status.get("usage"),
         "dashboard": runtime_status.get("dashboard"),
         "account": {
@@ -672,8 +686,10 @@ def _status_payload() -> dict:
         }
         if account
         else None,
-        "log_tail": _tail_log(),
     }
+    if include_details:
+        payload.update(urls=_dashboard_urls(), log_tail=_tail_log())
+    return payload
 
 
 def _app_health_payload() -> dict:
@@ -708,6 +724,9 @@ class ControlPanelHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/status":
             self._send_json(_status_payload())
+            return
+        if parsed.path == "/api/usage-status":
+            self._send_json(_status_payload(include_details=False))
             return
         if parsed.path == "/api/app/health":
             self._send_json(_app_health_payload())

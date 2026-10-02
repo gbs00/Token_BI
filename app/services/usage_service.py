@@ -118,7 +118,9 @@ class UsageService:
         if not self.access_state()[0]:
             return DashboardPayload(
                 state=PageState.EMPTY,
-                message="已断开账号接入，请在 Mac 控制台点击登录账号恢复。",
+                message=("账号配置无法读取，已隔离原文件。请在 Mac 端点击登录账号重新连接。"
+                         if self._account_service.recovery_required else
+                         "已断开账号接入，请在 Mac 控制台点击登录账号恢复。"),
                 detail_links=self._detail_links(),
             )
         return DashboardPayload(
