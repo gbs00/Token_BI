@@ -30,6 +30,8 @@ TAURI_SIGNING_PRIVATE_KEY=/path/to/updater.key TAURI_SIGNING_PRIVATE_KEY_PASSWOR
 
 版本保持一致：`app/__init__.py`、`package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`Cargo.lock`、`tauri.conf.json`。API 和 CLI RPC 共用 Python 版本常量，元数据一致性由测试检查。
 
+Rust 工具链由仓库根目录 `rust-toolchain.toml` 固定为本轮已验证的 1.95.0，包含 rustfmt / Clippy；Checks 显式安装相同版本。升级工具链需单独回归，不通过跟随 `stable` 的新规则改变既有发布门禁。
+
 ## 验收清单
 
 - App 在菜单栏常驻，首次引导、重复打开、失焦收起和显式退出符合预期；无固定开关或图钉。

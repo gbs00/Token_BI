@@ -28,6 +28,9 @@ jobs:
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
       - name: Configure isolated application data
         run: printf 'TOKEN_BI_APP_DATA_DIR=%s/token-bi-checks\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install development dependencies
