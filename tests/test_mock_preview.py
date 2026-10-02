@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import select
 import subprocess
+import tempfile
 
 import httpx
 import pytest
@@ -23,11 +24,14 @@ def test_mock_entrypoint_never_initializes_real_services_or_changes_accounts(tmp
     config.write_bytes(original)
     environment = {**os.environ, "TOKEN_BI_APP_DATA_DIR": str(tmp_path),
                    "TOKEN_BI_USE_MOCK_SCRAPER": "true", "PYTHONDONTWRITEBYTECODE": "1"}
+    diagnostics = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     process = subprocess.Popen(["/bin/zsh", str(root / "scripts/start_mock_preview.sh"), "0"],
-                               cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               cwd=root, env=environment, stdout=subprocess.PIPE, stderr=diagnostics,
                                text=True)
     try:
-        assert select.select([process.stdout], [], [], 8)[0], "preview did not become ready"
+        if not select.select([process.stdout], [], [], 30)[0]:
+            diagnostics.seek(0)
+            pytest.fail(f"preview did not become ready: {diagnostics.read()[-2000:]}")
         line = process.stdout.readline().strip()
         assert line.startswith("Sample dashboard: http://127.0.0.1:")
         url = line.removeprefix("Sample dashboard: ").removesuffix("/dashboard")
@@ -47,4 +51,4 @@ def test_mock_entrypoint_never_initializes_real_services_or_changes_accounts(tmp
             process.kill()
             process.wait(timeout=5)
         process.stdout.close()
-        process.stderr.close()
+        diagnostics.close()

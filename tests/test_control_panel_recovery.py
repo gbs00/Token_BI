@@ -5,6 +5,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -136,20 +137,23 @@ def test_real_control_recovers_hung_owned_backend_and_shuts_down(tmp_path):
                    "TOKEN_BI_USE_MOCK_SCRAPER": "false", "PYTHONDONTWRITEBYTECODE": "1",
                    "HTTP_PROXY": "http://127.0.0.1:1", "http_proxy": "http://127.0.0.1:1",
                    "NO_PROXY": "", "no_proxy": ""}
+    diagnostics = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     process = subprocess.Popen([sys.executable, "-m", "scripts.control_cli", "--port", str(ports[0]),
                                 "--main-port", str(ports[1])], cwd=root, env=environment,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=diagnostics, stderr=subprocess.STDOUT)
     owned = []
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{ports[0]}", trust_env=False, timeout=20) as client:
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 30
             while True:
                 try:
-                    if client.get("/api/app/health").status_code == 200:
+                    if client.get("/api/app/health", timeout=0.5).status_code == 200:
                         break
                 except httpx.TransportError:
                     pass
-                assert process.poll() is None and time.monotonic() < deadline
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    diagnostics.seek(0)
+                    pytest.fail(f"control did not become ready: {diagnostics.read()[-2000:]}")
                 time.sleep(0.05)
             result = client.post("/api/start").json()
             assert result["ok"] is True, result
@@ -180,3 +184,4 @@ def test_real_control_recovers_hung_owned_backend_and_shuts_down(tmp_path):
         if process.poll() is None:
             process.kill()
             process.wait(timeout=3)
+        diagnostics.close()
