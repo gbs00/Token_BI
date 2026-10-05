@@ -12,6 +12,38 @@ import httpx
 from scripts import control_panel
 
 
+@pytest.mark.parametrize("broken", [b"[]", b"null", b"1", b"{", b"\xff"])
+def test_invalid_runtime_state_falls_back_to_default_port(monkeypatch, tmp_path, broken):
+    path = tmp_path / "runtime.json"
+    path.write_bytes(broken)
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", path)
+    assert control_panel._read_runtime_state() == {}
+    assert control_panel._current_main_port() == control_panel.DEFAULT_MAIN_PORT
+
+
+@pytest.mark.parametrize("value", ["Infinity", "NaN", "-1", "65536", "null", "[]"])
+def test_invalid_runtime_port_falls_back_without_crashing(monkeypatch, tmp_path, value):
+    path = tmp_path / "runtime.json"
+    path.write_text('{"port":' + value + '}')
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", path)
+    assert control_panel._current_main_port() == control_panel.DEFAULT_MAIN_PORT
+
+
+def test_runtime_write_is_atomic_and_preserves_previous_state_on_failure(monkeypatch, tmp_path):
+    from app.services import local_json_store
+    path = tmp_path / "runtime.json"
+    monkeypatch.setattr(control_panel, "RUNTIME_STATE_FILE", path)
+    control_panel._write_runtime_state(8787, 123)
+    assert path.stat().st_mode & 0o777 == 0o600
+    def fail(*_):
+        raise OSError("fixture replace failure")
+    monkeypatch.setattr(local_json_store.os, "replace", fail)
+    with pytest.raises(OSError):
+        control_panel._write_runtime_state(8788, 456)
+    assert control_panel._read_runtime_state() == {"port": 8787, "pid": "123"}
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_status_poll_only_reads_runtime_endpoint(monkeypatch) -> None:
     calls = []
     def request(method, path, **kwargs):

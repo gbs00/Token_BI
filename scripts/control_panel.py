@@ -20,6 +20,7 @@ from app.process_lifecycle import stop_owned_process, owns_dev_service
 from app.http_access import allows_local_management
 from app.local_http import LocalHTTPServer as ThreadingHTTPServer, open_local_url
 from app.process_logging import capture_process_output, open_process_log
+from app.services.local_json_store import write_private_json
 import psutil
 
 
@@ -121,17 +122,14 @@ def _read_runtime_state() -> dict:
     if not RUNTIME_STATE_FILE.exists():
         return {}
     try:
-        return json.loads(RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        state = json.loads(RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except (ValueError, OSError):
         return {}
 
 
 def _write_runtime_state(port: int, pid: int | str | None) -> None:
-    RUNTIME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    RUNTIME_STATE_FILE.write_text(
-        json.dumps({"port": port, "pid": str(pid or "")}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_private_json(RUNTIME_STATE_FILE, {"port": port, "pid": str(pid or "")})
     _invalidate_dashboard_url_cache()
 
 
@@ -144,9 +142,9 @@ def _current_main_port() -> int:
     state = _read_runtime_state()
     try:
         port = int(state.get("port") or DEFAULT_MAIN_PORT)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         port = DEFAULT_MAIN_PORT
-    return port
+    return port if 1 <= port <= 65535 else DEFAULT_MAIN_PORT
 
 
 def _cleanup_stale_runtime_state() -> None:

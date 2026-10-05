@@ -1,6 +1,6 @@
 """Read-only reset metadata must not compromise quota availability or account isolation."""
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -32,7 +32,7 @@ def test_oauth_reads_details_with_same_token_and_short_deadline(tmp_path, test_s
     result = oauth(tmp_path, get).fetch_usage(_build_account(test_settings)).payload
     assert [url for url, _, _ in calls] == ["https://chatgpt.com/backend-api/wham/usage", "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"]
     assert calls[0][1] == calls[1][1]
-    assert calls[1][2] == 2.0
+    assert calls[1][2] == 5.0
     assert result["reset_credits"]["available_count"] == 3
     assert result["reset_credits"]["expires_at"] == [datetime(2030, 1, 1, 12, tzinfo=timezone.utc), None]
     assert result["windows"][0]["remaining_pct"] == 53
@@ -52,7 +52,7 @@ def test_no_unnecessary_detail_request(tmp_path, test_settings, summary):
 
 
 @pytest.mark.parametrize("failure", [ConnectorTimeoutError("slow"), ConnectorNetworkError("offline"), SessionExpiredError("unsupported")])
-def test_optional_detail_failure_preserves_quota_and_count(tmp_path, test_settings, failure):
+def test_optional_detail_failure_preserves_quota_and_count(tmp_path, test_settings, failure, caplog):
     def get(url, *_):
         if url.endswith("/usage"):
             return {"weekly_remaining_pct": 53, "rate_limit_reset_credits": {"available_count": 3}}
@@ -60,6 +60,9 @@ def test_optional_detail_failure_preserves_quota_and_count(tmp_path, test_settin
     result = oauth(tmp_path, get).fetch_usage(_build_account(test_settings)).payload
     assert result["windows"][0]["remaining_pct"] == 53
     assert result["reset_credits"] == {"available_count": 3, "expires_at": None}
+    assert f"reset_details_unavailable error_type={type(failure).__name__}" in caplog.text
+    assert "test-token" not in caplog.text
+    assert str(failure) not in caplog.text
 
 
 @pytest.mark.parametrize("details", [[], None, {"available_count": "3"}, {"available_count": -1}])
@@ -137,3 +140,85 @@ def test_old_snapshot_without_reset_field_remains_readable(container):
     restored = store.load(ready.account)
     assert restored.metrics == ready.metrics
     assert restored.reset_credits is None
+
+
+class ResetManager(ControlledConnectorManager):
+    def __init__(self):
+        super().__init__()
+        self.resets = {"available_count": 2, "expires_at": ["2030-01-01T12:00:00Z", "2030-01-02T12:00:00Z"]}
+        self.key = "a" * 64
+
+    def fetch_usage(self, account):
+        result = super().fetch_usage(account)
+        result.payload.update(reset_credits=self.resets, account_identity_key=self.key)
+        return result
+
+
+def test_missing_reset_details_retain_original_timestamp_across_restart(container):
+    _create_active_account(container)
+    now = [datetime(2030, 1, 1, tzinfo=timezone.utc)]
+    manager = ResetManager()
+    coordinator, _, store = _build_coordinator(container, manager, now=lambda: now[0])
+    ready = coordinator.refresh()
+    manager.resets = {"available_count": 2, "expires_at": None}
+    now[0] += timedelta(minutes=3)
+    stale = coordinator.refresh()
+    assert stale.state.value == "ready"
+    assert stale.reset_credits.details_stale is True
+    assert stale.reset_credits.expires_at == ready.reset_credits.expires_at
+    assert stale.reset_credits.details_updated_at == ready.reset_credits.details_updated_at
+    assert stale.summary.last_success_at == now[0]
+    assert store.load(stale.account).reset_credits == stale.reset_credits
+
+    restarted, _, _ = _build_coordinator(container, manager, now=lambda: now[0])
+    now[0] += timedelta(minutes=3)
+    assert restarted.refresh().reset_credits == stale.reset_credits
+    now[0] += timedelta(minutes=10)
+    expired = restarted.refresh().reset_credits
+    assert expired.expires_at is None
+    assert expired.details_updated_at is None
+    assert expired.details_stale is False
+
+
+@pytest.mark.parametrize("change", ["count", "zero", "unsupported", "identity", "unverified", "expired", "logout", "clock_back"])
+def test_reset_details_never_cross_invalid_boundaries(container, change):
+    _create_active_account(container)
+    now = [datetime(2030, 1, 1, tzinfo=timezone.utc)]
+    manager = ResetManager()
+    if change == "unverified":
+        manager.key = None
+    elif change == "expired":
+        manager.resets["expires_at"][0] = "2030-01-01T00:01:00Z"
+    coordinator, _, _ = _build_coordinator(container, manager, now=lambda: now[0])
+    coordinator.refresh()
+    manager.resets = {"available_count": 2, "expires_at": None}
+    now[0] += timedelta(minutes=3)
+    if change == "count":
+        manager.resets["available_count"] = 3
+    elif change == "zero":
+        manager.resets = {"available_count": 0, "expires_at": []}
+    elif change == "unsupported":
+        manager.resets = None
+    elif change == "identity":
+        manager.key = "b" * 64
+    elif change == "clock_back":
+        now[0] -= timedelta(minutes=4)
+    elif change == "logout":
+        coordinator.disconnect()
+        assert coordinator.get_dashboard().reset_credits is None
+        coordinator.resume()
+    resets = coordinator.refresh().reset_credits
+    assert resets is None or not resets.expires_at
+    assert resets is None or not resets.details_stale
+
+
+def test_partial_fresh_details_replace_old_rows_without_merging(container):
+    _create_active_account(container)
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    manager = ResetManager()
+    coordinator, _, _ = _build_coordinator(container, manager, now=lambda: now)
+    coordinator.refresh()
+    manager.resets = {"available_count": 2, "expires_at": ["2030-01-03T12:00:00Z", None]}
+    resets = coordinator.refresh().reset_credits
+    assert resets.expires_at == [datetime(2030, 1, 3, 12, tzinfo=timezone.utc), None]
+    assert resets.details_stale is False

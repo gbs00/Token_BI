@@ -40,14 +40,8 @@ class UsageService:
         self._session_service = session_service
         self._connector_manager = connector_manager
 
-    def sync_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
-        enabled, revision = self.access_state()
-        if not enabled:
-            return self.empty_dashboard()
-        return self.commit_dashboard(self.prepare_dashboard(account_id), revision)
-
     def prepare_dashboard(self, account_id: Optional[str] = None) -> DashboardPayload:
-        account = self._resolve_account(account_id)
+        account = self._account_service.preferred_account(account_id)
         if account is None:
             account = self._bootstrap_account()
 
@@ -87,7 +81,7 @@ class UsageService:
         identity = self._connector_manager.local_identity()
         if identity is None:
             return None
-        account = self._resolve_account(account_id) or self._bootstrap_account()
+        account = self._account_service.preferred_account(account_id) or self._bootstrap_account()
         masked_email, key = identity
         # 已有绑定不随外部 App 换号；由 connector 校验并隔离其他账号。
         if account.identity_key:
@@ -102,11 +96,8 @@ class UsageService:
     def set_access_enabled(self, enabled: bool) -> None:
         self._account_service.set_access_enabled(enabled)
 
-    def _resolve_account(self, account_id: Optional[str]) -> Optional[AccountRecord]:
-        return self._account_service.preferred_account(account_id)
-
     def current_account(self, account_id: Optional[str] = None) -> Optional[AccountRecord]:
-        return self._resolve_account(account_id) if self.access_state()[0] else None
+        return self._account_service.preferred_account(account_id) if self.access_state()[0] else None
 
     def mark_account_expired(self, account_id: str) -> Optional[AccountRecord]:
         return self._account_service.update_account_status(
@@ -124,7 +115,7 @@ class UsageService:
                 detail_links=self._detail_links(),
             )
         return DashboardPayload(
-            account=self._resolve_account(None),
+            account=self._account_service.preferred_account(),
             state=PageState.EMPTY,
             message=message or "等待首次同步，Token BI 将自动读取本机 Codex 登录态。",
             detail_links=self._detail_links(),

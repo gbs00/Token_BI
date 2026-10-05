@@ -101,7 +101,10 @@ def test_empty_dashboard_does_not_call_upstream_when_no_accounts(container) -> N
 def test_sync_bootstraps_local_codex_account_when_no_records(container) -> None:
     service, manager = _make_service(container)
 
-    payload = service.sync_dashboard()
+    revision = service.access_state()[1]
+    prepared = service.prepare_dashboard()
+    assert container.account_service.list_accounts() == []
+    payload = service.commit_dashboard(prepared, revision)
 
     assert manager.calls == 1
     assert payload.state == PageState.READY
@@ -116,7 +119,10 @@ def test_account_status_never_blocks_oauth_or_cli_sync(container, initial_status
     account = _make_account(container, initial_status)
     service, manager = _make_service(container)
 
-    payload = service.sync_dashboard(account.account_id)
+    revision = service.access_state()[1]
+    prepared = service.prepare_dashboard(account.account_id)
+    assert container.account_service.get_account(account.account_id) == account
+    payload = service.commit_dashboard(prepared, revision)
 
     assert manager.calls == 1
     assert payload.state == PageState.READY
@@ -129,7 +135,7 @@ def test_sync_uses_actual_connector_metadata(container) -> None:
     account = _make_account(container)
     service, _ = _make_service(container, mode="local")
 
-    payload = service.sync_dashboard(account.account_id)
+    payload = service.prepare_dashboard(account.account_id)
 
     assert payload.summary.source_type == "local_snapshot"
     assert payload.summary.source_detail == "local_snapshot_json"
@@ -142,7 +148,8 @@ def test_sync_preserves_alias_when_account_identity_is_unchanged(container) -> N
     )
     service, _ = _make_service(container)
 
-    payload = service.sync_dashboard(account.account_id)
+    revision = service.access_state()[1]
+    payload = service.commit_dashboard(service.prepare_dashboard(account.account_id), revision)
 
     assert payload.account.account_alias == "工作账号"
     assert container.account_service.get_account(account.account_id).account_alias == "工作账号"
@@ -152,7 +159,7 @@ def test_sync_supports_weekly_only_quota(container) -> None:
     account = _make_account(container)
     service, _ = _make_service(container, mode="weekly_only")
 
-    payload = service.sync_dashboard(account.account_id)
+    payload = service.prepare_dashboard(account.account_id)
 
     assert [metric.metric_type for metric in payload.metrics] == ["weekly"]
     assert payload.metrics[0].remaining_pct == 89
@@ -163,14 +170,14 @@ def test_sync_rejects_unknown_official_windows(container) -> None:
     service, _ = _make_service(container, mode="unknown_window")
 
     with pytest.raises(AnalyticsPageChangedError):
-        service.sync_dashboard(account.account_id)
+        service.prepare_dashboard(account.account_id)
     assert container.account_service.get_account(account.account_id) == account
 
 
 def test_invalid_first_sync_does_not_create_an_active_account(container) -> None:
     service, _ = _make_service(container, mode="unknown_window")
     with pytest.raises(AnalyticsPageChangedError):
-        service.sync_dashboard()
+        service.prepare_dashboard()
     assert container.account_service.list_accounts() == []
 
 
@@ -178,7 +185,7 @@ def test_sync_normalizes_known_official_windows(container) -> None:
     account = _make_account(container)
     service, _ = _make_service(container)
 
-    payload = service.sync_dashboard(account.account_id)
+    payload = service.prepare_dashboard(account.account_id)
 
     assert [metric.metric_type for metric in payload.metrics] == ["session", "weekly"]
     assert [metric.label for metric in payload.metrics] == ["5h 额度", "周额度"]
@@ -189,7 +196,7 @@ def test_sync_does_not_expose_raw_window(container) -> None:
     account = _make_account(container)
     service, _ = _make_service(container, mode="sensitive_raw_window")
 
-    payload = service.sync_dashboard(account.account_id)
+    payload = service.prepare_dashboard(account.account_id)
 
     dumped = payload.model_dump_json()
     assert "raw_window" not in dumped
@@ -201,7 +208,7 @@ def test_auth_failure_is_propagated_without_preemptive_status_change(container) 
     service, manager = _make_service(container, mode="expired")
 
     with pytest.raises(SessionExpiredError):
-        service.sync_dashboard(account.account_id)
+        service.prepare_dashboard(account.account_id)
 
     assert manager.calls == 1
     assert container.account_service.get_account(account.account_id).status == AccountStatus.ACTIVE

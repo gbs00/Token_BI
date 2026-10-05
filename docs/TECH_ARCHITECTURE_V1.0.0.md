@@ -459,7 +459,7 @@ sequenceDiagram
     API-->>Sidecar: JSON / HTML
 
     loop Mac 后台调度（成功后 180 秒）
-        Coordinator->>Usage: sync_dashboard()
+        Coordinator->>Usage: prepare_dashboard()
         Usage->>Manager: fetch_usage(account)
         Manager->>OAuth: fetch_usage()
         alt OAuth success
@@ -475,6 +475,8 @@ sequenceDiagram
         end
         Manager-->>Usage: connector result
         Usage-->>Coordinator: DashboardPayload
+        Coordinator->>Usage: commit_dashboard(payload, access_revision)
+        Usage-->>Coordinator: 已确认接入代次的结果
         Coordinator->>Store: 原子替换最后成功快照
     end
 ```

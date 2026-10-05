@@ -11,6 +11,7 @@ const request = action => invoke('panel_action', { action });
 let status = null, boot = { phase: 'starting', visible: true }, view = 'home', kind = 'lan';
 let busy = false, serial = 0, qrSerial = 0, qrURL = '', qrKey = '';
 let pollRunning = false, nextRead = 0, toastTimer;
+let metricsKey, resetsKey;
 
 function feedback(message) {
   clearTimeout(toastTimer);
@@ -39,7 +40,21 @@ function render() {
     : !model.authenticated ? '未检测到可用账号' : '等待额度数据';
   $('empty-copy').textContent = boot.phase !== 'ready' ? '' : !model.authenticated
     ? model.message || '登录后即可查看 Codex 使用额度' : '等待下一次同步';
-  const cards = model.metrics.map(metric => {
+  renderMetrics(model.metrics);
+  renderResetCredits(model);
+  $('diag-health').textContent = status?.healthy ? '运行中' : status?.health_error || boot.message || '等待就绪';
+  $('diag-success').textContent = lastSuccess(model.summary);
+  $('diag-state').textContent = model.message || ({ready:'同步成功', empty:'等待数据', stale:'上次数据', reauth_required:'需要重新登录'}[model.state] || model.state);
+  $('log').textContent = status?.log_tail || '暂无日志';
+  document.querySelector('[data-action="logout"]').textContent = model.authenticated ? '退出账号' : '登录账号';
+  updateButtons();
+  if (view === 'qr') void updateQR();
+}
+function renderMetrics(metrics) {
+  const key = JSON.stringify(metrics);
+  if (key === metricsKey) return;
+  metricsKey = key;
+  const cards = metrics.map(metric => {
     const article = document.createElement('article');
     article.className = `metric tier-${tier(metric.remaining_pct)}`;
     const heading = document.createElement('div'); heading.className = 'metric-heading';
@@ -62,21 +77,20 @@ function render() {
     return article;
   });
   $('metrics').replaceChildren(...cards);
-  renderResetCredits(model);
-  $('diag-health').textContent = status?.healthy ? '运行中' : status?.health_error || boot.message || '等待就绪';
-  $('diag-success').textContent = lastSuccess(model.summary);
-  $('diag-state').textContent = model.message || ({ready:'同步成功', empty:'等待数据', stale:'上次数据', reauth_required:'需要重新登录'}[model.state] || model.state);
-  $('log').textContent = status?.log_tail || '暂无日志';
-  document.querySelector('[data-action="logout"]').textContent = model.authenticated ? '退出账号' : '登录账号';
-  updateButtons();
-  if (view === 'qr') void updateQR();
 }
 function renderResetCredits(model = viewModel(status)) {
   const resets = model.metrics.length ? storedResets(model.resetCredits) : null;
+  const stale = Boolean(resets && model.resetCredits.details_stale);
+  const updatedAt = model.resetCredits?.details_updated_at;
+  const key = JSON.stringify([resets, stale, updatedAt]);
+  if (key === resetsKey) return;
+  resetsKey = key;
   $('reset-credits').hidden = !resets;
   $('metrics').classList.toggle('with-resets', Boolean(resets));
-  $('reset-credits-times').replaceChildren();
-  if (!resets) return;
+  $('reset-credits-stale').hidden = !stale;
+  $('reset-credits-stale').title = stale && Number.isFinite(Date.parse(updatedAt))
+    ? `明细最后同步于 ${new Date(updatedAt).toLocaleString('zh-CN')}` : '';
+  if (!resets) { $('reset-credits-times').replaceChildren(); return; }
   const entries = resets.expirations.map(expiry => {
     const item = document.createElement('span'); item.setAttribute('role', 'listitem');
     item.textContent = expiry.label;
@@ -86,7 +100,7 @@ function renderResetCredits(model = viewModel(status)) {
   });
   if (resets.unknown) {
     const unknown = document.createElement('span'); unknown.setAttribute('role', 'listitem');
-    unknown.textContent = `${resets.unknown} 次到期未知`; entries.push(unknown);
+    unknown.textContent = '到期时间暂未同步'; entries.push(unknown);
   }
   $('reset-expirations').hidden = entries.length === 0;
   $('reset-credits-empty').hidden = entries.length > 0;
@@ -186,7 +200,10 @@ async function poll() {
       if (boot.phase === 'ready' && !busy && Date.now() >= nextRead) {
         nextRead = Date.now() + 15000; await readStatus();
       } else if (boot.phase !== 'ready') render();
-      document.querySelectorAll('[data-reset]').forEach(el => { el.textContent = `重置剩余 ${resetRemaining(el.dataset.reset)}`; });
+      document.querySelectorAll('[data-reset]').forEach(el => {
+        const text = `重置剩余 ${resetRemaining(el.dataset.reset)}`;
+        if (el.textContent !== text) el.textContent = text;
+      });
       renderResetCredits();
     }
   } catch (error) { boot = {phase:'error', message:String(error.message || error)}; render(); }
@@ -202,7 +219,11 @@ async function perform(action) {
     if (action === 'retry_start') { boot.phase = 'starting'; render(); }
     else await readStatus();
     if (action === 'login') feedback(result.message || '登录请求已提交');
-    if (action === 'refresh') feedback('额度已同步');
+    if (action === 'refresh') {
+      const credits = viewModel(status).resetCredits;
+      feedback(credits?.details_stale || storedResets(credits)?.unknown
+        ? '额度已同步，存储重置明细待同步' : '额度已同步');
+    }
   } catch (error) { feedback(String(error.message || error)); if (boot.phase === 'ready') await readStatus(); }
   finally { busy = false; nextRead = action === 'retry_start' ? 0 : Date.now() + 15000; updateButtons(); }
 }

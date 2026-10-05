@@ -1,5 +1,7 @@
 # Token BI 技术架构文档
 
+> 当前代码责任边界、v1.2.8 优化和验证范围见[架构审计纪要](docs/REVIEW_FIXES_2026-10-05.md)。下方 v0.9.1 基线不应作为新功能的调用入口参考。
+
 > v1.2.6 当前数据链路、进程边界与异常规则见 [WKWebView 生产接入](docs/TECH_WKWEBVIEW_PRODUCTION.md)，优先于下方历史 Chrome/CDP 方案。
 
 > v1.2.6 的 control/backend 保留独立进程，通过 `token-bi.spec` 共用一套 Python 运行库。构建约束见[发布指南](docs/RELEASE.md)，实测结果见[共享运行库精简验证](docs/releases/v1.2.6-shared-runtime.md)。

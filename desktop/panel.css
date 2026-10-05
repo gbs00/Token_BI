@@ -38,7 +38,9 @@ h2 { font-size: 18px; font-weight: 600; }
 .tier-high { --metric-color: #66d9ee; } .tier-medium { --metric-color: #4c8bfa; } .tier-low { --metric-color: #f2c75c; } .tier-critical { --metric-color: #f06f72; }
 .reset { text-align: right; color: #ccc; margin-top: 11px; font-size: 14px; line-height: 1.5; }
 .reset-credits { padding: 12px 2px 14px; border-bottom: 1px solid var(--line); }
-.reset-credits h2 { font-size: 13px; font-weight: 600; margin-bottom: 7px; }
+.reset-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.reset-credits h2 { font-size: 13px; font-weight: 600; }
+#reset-credits-stale { font-size: 11px; color: var(--secondary); }
 .reset-expirations, #reset-credits-empty { color: var(--secondary); font-size: 12px; line-height: 1.5; }
 .reset-expirations { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
 .reset-expirations > img { width: 13px; height: 13px; margin-top: 2px; flex: 0 0 13px; filter: invert(.72); }

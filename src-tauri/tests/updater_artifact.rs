@@ -83,7 +83,7 @@ fn signed_release_download_install_and_tamper_rejection() {
         std::fs::write(old_runtime.join(name), b"old runtime").unwrap();
     }
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-    context.package_info_mut().version = "1.2.6".parse().unwrap();
+    context.package_info_mut().version = "1.2.7".parse().unwrap();
     context
         .config_mut()
         .plugins
@@ -107,7 +107,7 @@ fn signed_release_download_install_and_tamper_rejection() {
             .check()
             .await
             .unwrap()
-            .expect("1.2.6 fixture must find a newer release");
+            .expect("1.2.7 fixture must find a newer release");
         assert_eq!(update.version, config["version"].as_str().unwrap());
         let verified = update.download(|_, _| {}, || {}).await.unwrap();
         assert!(

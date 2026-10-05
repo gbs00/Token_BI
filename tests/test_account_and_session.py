@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -57,6 +59,66 @@ def test_account_file_corruption_invalidates_inflight_revision(container) -> Non
     service.set_access_enabled(True)
 
     assert service.access_state()[1] > before + 1
+
+
+def test_unchanged_account_polls_do_not_reread_file(container, monkeypatch):
+    service = container.account_service
+    account = service.create_account(CreateAccountRequest(masked_email="test****@example.com"))
+    reads = []
+    read_text = Path.read_text
+    def tracked(path, *args, **kwargs):
+        if path == container.settings.accounts_file:
+            reads.append(path)
+        return read_text(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", tracked)
+    for _ in range(20):
+        assert service.access_state() == (True, 0)
+        assert service.preferred_account().account_id == account.account_id
+        assert service.access_state() == (True, 0)
+    assert len(reads) == 1
+
+
+def test_account_cache_notices_same_size_same_mtime_replacement(container):
+    service = container.account_service
+    path = container.settings.accounts_file
+    service.set_access_enabled(True)
+    before = service.access_state()
+    raw, original_stat = path.read_text(), path.stat()
+    replacement = path.with_suffix(".replacement")
+    replacement.write_text(raw.replace('"access_revision": 1', '"access_revision": 2'))
+    os.utime(replacement, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    replacement.replace(path)
+    assert path.stat().st_size == original_stat.st_size
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+    assert service.access_state() == (True, before[1] + 1)
+
+
+def test_account_cache_does_not_share_mutable_records(container):
+    service = container.account_service
+    account = service.create_account(CreateAccountRequest(masked_email="test****@example.com"))
+    service.list_accounts()[0].account_alias = "changed"
+    service._read_payload()["accounts"].clear()
+    assert service.get_account(account.account_id).account_alias == account.account_alias
+
+
+def test_failed_account_write_keeps_cached_access_state(container, monkeypatch):
+    from app.services import local_json_store
+    service = container.account_service
+    before = service.access_state()
+    def fail(*_):
+        raise OSError("fixture write failure")
+    monkeypatch.setattr(local_json_store.os, "replace", fail)
+    with pytest.raises(OSError):
+        service.set_access_enabled(False)
+    assert service.access_state() == before
+
+
+def test_account_cache_missing_file_fails_closed(container):
+    service = container.account_service
+    before = service.access_state()[1]
+    container.settings.accounts_file.unlink()
+    assert service.access_state()[0] is False
+    assert service.access_state()[1] > before
 
 
 def test_delete_account_only_removes_binding_and_preserves_legacy_profile(container) -> None:

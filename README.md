@@ -1,10 +1,10 @@
 # Token BI 解决方案
 
-## 当前版本：1.2.6
+## 当前版本：1.2.8
 
-原生 WKWebView 网页登录、动态额度内环与共享 Python 运行库已完成本机验证；App 缩至 40.14 MB。[登录与性能验证](docs/releases/v1.2.6-verification.md)、[包体精简与安装验证](docs/releases/v1.2.6-shared-runtime.md)。
+1.2.8 优化账号配置读取与面板渲染，统一原子文件写入，并改善存储重置明细暂时缺失时的展示。[更新说明](docs/RELEASE_NOTES_v1.2.8.md)、[本轮审计与局部性能](docs/REVIEW_FIXES_2026-10-05.md)。原生 WKWebView 与共享 Python 运行库保留，[包体精简与安装验证](docs/releases/v1.2.6-shared-runtime.md)为 1.2.6 历史记录。
 
-已于 2026-09-25 正式发布 [v1.2.6](https://github.com/gbs00/Token_BI/releases/tag/v1.2.6)，支持设置内检查并确认更新；[发布回执与制品校验](docs/releases/v1.2.6-release.md)。
+1.2.8 正在完成正式发布验证，提供 DMG、签名更新归档及版本清单；已安装版本支持设置内检查并确认更新，重启后生效。上一版 [v1.2.7 发布回执](docs/releases/v1.2.7-release.md)保留历史验收结果。
 
 Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备副屏看板。安装后点击 Mac 菜单栏图标查看账号、剩余额度与重置时间；局域网服务自动启动，扫码即可连接副屏。隐藏面板不停止同步，退出 App 才停止本实例启动的服务。
 
@@ -19,7 +19,7 @@ Token BI 是面向 Codex 单账号用户的菜单栏额度工具与闲置设备�
 - 下载：[GitHub Releases](https://github.com/gbs00/Token_BI/releases)。Apple Silicon、ad hoc 签名、未公证。1.2.1 用户可在设置中检查并确认更新；1.2.0 及更早版本需手动安装一次新版。后台发现新版本显示红点，不强制升级。
 - 开发与发布：[菜单栏实现](docs/TECH_MENUBAR.md)、[看板自适应](docs/TECH_DASHBOARD_RESPONSIVE.md)、[发布步骤](docs/RELEASE.md)、[1.2.5 说明](docs/RELEASE_NOTES_v1.2.5.md)、[更新技术纪要](docs/TECH_v1.2.1.md)。
 - 后续规划：[Roadmap](docs/ROADMAP.md)，记录待设计和待评审需求。
-- 本次审计及回归边界：[2026-09-19 审计修复纪要](docs/REVIEW_FIXES_2026-09-19.md)。
+- 当前审计及回归边界：[2026-10-05 架构与运行效率优化](docs/REVIEW_FIXES_2026-10-05.md)；[2026-09-19 历史审计](docs/REVIEW_FIXES_2026-09-19.md)。
 - 工程精简：[包体与工作区清理](docs/MAINTENANCE_2026-09-21.md)。修复运行库重复打包，退役旧 HTTP 控制台与打开脚本；管理 API、菜单栏和副屏看板保留。`npm run workspace:clean` 预览过期文件，显式追加 `-- --apply` 才执行清理。
 - 1.2.6 起最低 macOS 11；[原生网页登录与异常规则](docs/TECH_WKWEBVIEW_PRODUCTION.md)、[1.2.6 更新说明](docs/RELEASE_NOTES_v1.2.6.md)。Playwright 仅用于开发测试，不随 App 分发。旧 Chrome 登录态不导入、不清理；首次使用新网页兜底需要登录一次。
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -18,6 +17,7 @@ from app.models.usage_snapshot import (
     ResetCredits,
 )
 from app.services.usage_connectors import mask_identity
+from app.services.local_json_store import write_private_json
 
 
 class LatestDashboardStore:
@@ -68,7 +68,7 @@ class LatestDashboardStore:
                         DetailLink.model_validate(item) for item in raw.get("detail_links") or []
                     ],
                 )
-            except (json.JSONDecodeError, OSError, TypeError, ValidationError):
+            except (ValueError, OSError, TypeError):
                 return None
 
     def save(self, payload: DashboardPayload) -> None:
@@ -85,32 +85,15 @@ class LatestDashboardStore:
             "reset_credits": payload.reset_credits.model_dump(mode="json") if payload.reset_credits else None,
             "detail_links": [link.model_dump(mode="json") for link in payload.detail_links],
         }
-        encoded = json.dumps(stored, ensure_ascii=False, indent=2) + "\n"
-
         with self._lock:
-            self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = self._snapshot_path.with_suffix(self._snapshot_path.suffix + ".tmp")
-            descriptor = os.open(
-                temporary_path,
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            )
-            try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    handle.write(encoded)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary_path, self._snapshot_path)
-                os.chmod(self._snapshot_path, 0o600)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+            write_private_json(self._snapshot_path, stored)
 
     def clear(self, account_id: Optional[str] = None) -> None:
         with self._lock:
             if account_id is not None and self._snapshot_path.exists():
                 try:
                     raw = json.loads(self._snapshot_path.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
+                except (ValueError, OSError):
                     raw = {}
                 if not isinstance(raw, dict):
                     raw = {}

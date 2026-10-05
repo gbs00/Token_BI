@@ -254,15 +254,33 @@ def test_identity_mismatch_discards_persisted_snapshot(container) -> None:
     assert not store.snapshot_path.exists()
 
 
-def test_malformed_snapshot_does_not_break_startup_restore(container) -> None:
+@pytest.mark.parametrize("broken", [b"[]", b"{", b"null", b"\xff"])
+def test_malformed_snapshot_does_not_break_startup_restore(container, broken) -> None:
     account = _create_active_account(container)
     _, _, store = _build_coordinator(container)
     store.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-    store.snapshot_path.write_text("[]", encoding="utf-8")
+    store.snapshot_path.write_bytes(broken)
 
     restored = store.load(account)
 
     assert restored is None
+    store.clear(account.account_id)
+    assert not store.snapshot_path.exists()
+
+
+def test_snapshot_failed_replace_preserves_last_good_file(container, monkeypatch):
+    from app.services import local_json_store
+    _create_active_account(container)
+    coordinator, _, store = _build_coordinator(container)
+    ready = coordinator.refresh()
+    original = store.snapshot_path.read_bytes()
+    def fail(*_):
+        raise OSError("fixture write failure")
+    monkeypatch.setattr(local_json_store.os, "replace", fail)
+    with pytest.raises(OSError):
+        store.save(ready)
+    assert store.snapshot_path.read_bytes() == original
+    assert list(store.snapshot_path.parent.glob("*.tmp")) == []
 
 
 def test_dashboard_reads_never_trigger_an_upstream_sync(container) -> None:

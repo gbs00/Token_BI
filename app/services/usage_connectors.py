@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import json
+import logging
 import os
 import re
 import selectors
@@ -115,6 +116,7 @@ class UsageConnector(Protocol):
 
 HttpGet = Callable[[str, dict[str, str], float], dict]
 RpcClient = Callable[[str, Any], dict]
+logger = logging.getLogger(__name__)
 
 
 def default_codex_auth_paths() -> list[Path]:
@@ -194,13 +196,16 @@ class CodexOAuthConnector:
             try:
                 details = self._http_get(
                     urljoin(self._usage_url, "rate-limit-reset-credits"),
-                    headers, min(2.0, self._timeout_seconds),
+                    headers, min(5.0, self._timeout_seconds),
                 )
                 detailed_resets = _normalize_reset_credits(details)
                 if detailed_resets is not None:
                     normalized["reset_credits"] = detailed_resets
-            except (ScraperUnavailableError, OSError, ValueError, TypeError):
-                pass  # A missing/slow reset endpoint must not fail valid quota data.
+                else:
+                    logger.warning("reset_details_unavailable error_type=InvalidPayload")
+            except (ScraperUnavailableError, OSError, ValueError, TypeError) as exc:
+                # 可选明细失败不阻断额度，日志不记录响应或凭据。
+                logger.warning("reset_details_unavailable error_type=%s", type(exc).__name__)
         account_identity = self._extract_account_identity(id_token) or self._extract_account_identity(
             access_token
         )

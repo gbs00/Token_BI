@@ -42,6 +42,7 @@ class UsageSyncCoordinator:
     IMMEDIATE_RETRY_SECONDS = 2.0
     RATE_LIMIT_MIN_RETRY_SECONDS = 20.0
     SYNC_TIMEOUT_SECONDS = 45.0
+    RESET_DETAILS_MAX_AGE_SECONDS = 900.0
 
     def __init__(
         self,
@@ -277,6 +278,7 @@ class UsageSyncCoordinator:
             if payload.state != PageState.READY:
                 return payload
             completed_at = self._now()
+            payload = self._retain_reset_details(payload, completed_at)
             ready = self._with_schedule(
                 payload.model_copy(update={"state": PageState.READY, "message": None}),
                 last_attempt_at=attempt_at,
@@ -296,6 +298,30 @@ class UsageSyncCoordinator:
             ready.summary.source_type,
         )
         return ready
+
+    def _retain_reset_details(self, payload: DashboardPayload, now: datetime) -> DashboardPayload:
+        resets = payload.reset_credits
+        if resets is None:
+            return payload
+        if resets.available_count == 0 or any(value is not None for value in resets.expires_at or []):
+            return payload.model_copy(update={"reset_credits": resets.model_copy(update={
+                "details_stale": False, "details_updated_at": now,
+            })})
+        previous = self._current.reset_credits
+        if (previous is None or payload.account is None or not payload.account.identity_key
+                or not same_account_identity(self._current.account, payload.account)
+                or previous.available_count != resets.available_count):
+            return payload
+        known = [value for value in previous.expires_at or [] if value is not None]
+        observed_at = previous.details_updated_at or self._current.summary.last_success_at
+        if (not known or observed_at is None or observed_at.tzinfo is None
+                or not 0 <= (now - observed_at).total_seconds() <= self.RESET_DETAILS_MAX_AGE_SECONDS
+                or any(value.tzinfo is None or value <= now for value in known)):
+            return payload
+        # 次数相同也不代表明细未变；仅短期保留并明确标旧，不延长明细原始采集时间。
+        return payload.model_copy(update={"reset_credits": resets.model_copy(update={
+            "expires_at": previous.expires_at, "details_stale": True, "details_updated_at": observed_at,
+        })})
 
     def _fetch_with_deadline(self, account_id: Optional[str], deadline: float, generation: int) -> DashboardPayload:
         if self._fetch_thread is not None and self._fetch_thread.is_alive() and not self._fetch_done.is_set():

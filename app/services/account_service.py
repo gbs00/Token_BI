@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,6 +17,8 @@ class AccountService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._lock = threading.RLock()
+        self._cached_payload: Optional[dict] = None
+        self._cached_version: Optional[tuple[int, ...]] = None
         self._ensure_accounts_file()
 
     def _ensure_accounts_file(self) -> None:
@@ -25,6 +28,10 @@ class AccountService:
     def _read_payload(self) -> dict:
         with self._lock:
             try:
+                stat = self._settings.accounts_file.stat()
+                version = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                if self._cached_payload is not None and self._cached_version == version:
+                    return deepcopy(self._cached_payload)
                 raw = json.loads(self._settings.accounts_file.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict) or not isinstance(raw.get("accounts"), list):
                     raise ValueError("Invalid account metadata")
@@ -35,6 +42,9 @@ class AccountService:
                     raise ValueError("Invalid access revision")
                 if type(raw.get("access_enabled", True)) is not bool:
                     raise ValueError("Invalid access state")
+                # 使用读取前的版本；读取期间被替换的文件会在下一次访问时重新校验。
+                self._cached_version = version
+                self._cached_payload = deepcopy(raw)
                 return raw
             except (ValueError, TypeError, FileNotFoundError):
                 quarantine_json(self._settings.accounts_file)
@@ -54,7 +64,10 @@ class AccountService:
         self._write_payload(payload)
 
     def _write_payload(self, payload: dict) -> None:
-        write_private_json(self._settings.accounts_file, payload)
+        with self._lock:
+            write_private_json(self._settings.accounts_file, payload)
+            self._cached_payload = None
+            self._cached_version = None
 
     @property
     def recovery_required(self) -> bool:

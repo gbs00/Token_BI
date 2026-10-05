@@ -40,6 +40,8 @@ class ResetCredits(BaseModel):
     available_count: int = Field(ge=0)
     # None means details were not returned; individual None values mean unknown expiry.
     expires_at: Optional[list[Optional[datetime]]] = None
+    details_stale: bool = False
+    details_updated_at: Optional[datetime] = None
 
 
 class DashboardSummary(BaseModel):
